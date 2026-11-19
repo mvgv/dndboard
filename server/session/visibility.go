@@ -259,11 +259,16 @@ func (o *object) known() bool { return !o.Secret || o.found }
 // ViewFor returns what the Player Character viewer perceives. An unknown viewer
 // gets an empty view.
 func (s *Session) ViewFor(viewer ID) View {
-	v := View{Viewer: viewer, Round: s.round, Active: s.active().ID, Over: s.over, Winner: s.winner,
+	v := View{Viewer: viewer, Round: s.round, Over: s.over, Winner: s.winner,
 		Creatures: map[ID]CreatureState{}, Objects: map[ID]ObjectState{}, Traps: map[ID]TrapState{}}
 	c, ok := s.creatures[viewer]
 	if !ok {
 		return v
+	}
+	// Whose turn it is names a creature, so it is empty while the active
+	// creature is unseen or hidden.
+	if a := s.active(); s.sees(c, a) {
+		v.Active = a.ID
 	}
 	full := s.State()
 	for id, o := range s.creatures {

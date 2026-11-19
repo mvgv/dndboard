@@ -392,6 +392,26 @@ func TestEventsNeverNameHiddenCreaturesOrSecretDoors(t *testing.T) {
 	}
 }
 
+// Whose turn it is names a creature: View.Active must not name a hidden one.
+func TestViewActiveDoesNotNameAHiddenCreature(t *testing.T) {
+	ambusher := goblin("ambusher", 5, 2)
+	ambusher.HiddenDC = 18
+	s := startView(t, session.Config{
+		Dice:      dice.Fixed(15, 10, 5), // a goes first, the hidden ambusher second
+		Creatures: []session.CreatureSpec{pc("a", 1, 2), ambusher},
+	})
+	if got := s.ViewFor("a").Active; got != "a" {
+		t.Fatalf("Active = %q, want a on its own turn", got)
+	}
+	submit(t, s, session.EndTurn{Actor: "a"})
+	if got := s.State().Active; got != "ambusher" {
+		t.Fatalf("scenario: server Active = %q, want the ambusher's turn", got)
+	}
+	if got := s.ViewFor("a").Active; got != "" {
+		t.Fatalf("View.Active = %q leaks the hidden creature's turn", got)
+	}
+}
+
 // "You have Disadvantage on Wisdom (Perception) checks to see something in a
 // Lightly Obscured space": Search rolls with Disadvantage against a trap in Dim
 // Light, where it would otherwise find the trap with the first die.
