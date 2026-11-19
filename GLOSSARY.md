@@ -91,8 +91,24 @@ _Avoid_: AP, action points
 ### Content format
 
 **Entry**:
-One piece of Compendium or Adventure data in the content format, such as a weapon or a stat block. Entries are pure data, validated against the schema, and reference each other by ID.
+One piece of Compendium or Adventure data in the content format, such as a weapon, a stat block or a Feature. Entries are pure data or Effects, validated against the schema, and reference each other by ID.
 _Avoid_: record, row, asset
+
+**Feature**:
+An Entry for a class feature, feat or trait (Sneak Attack, Rage, Savage Attacker) that a stat block lists by ID. Its behavior is a list of Effects, optionally behind an Activation, or else it requires implementation.
+_Avoid_: ability, perk, trait (as the Entry kind)
+
+**Effect**:
+One declarative behavior of a Feature: a trigger (such as hitting with an attack), conditions that must all hold, a frequency (always, or once per turn) and an outcome (such as extra damage or Resistance). The rules engine interprets it; the vocabulary is closed and grows with the engine.
+_Avoid_: rule, script, modifier
+
+**Activation**:
+What makes a Feature's Effects apply only while it is on: its cost (a Bonus Action), uses, duration, what extends it and what ends it early, as for Rage.
+_Avoid_: toggle, buff
+
+**Requires implementation**:
+The flag on a Feature whose behavior the Effect vocabulary can't express. Such a Feature declares no Effects; the rules engine runs hand-written code registered under the Feature's ID, behind the same interface as interpreted Effects, and refuses to start a combat with a flagged Feature it has no code for.
+_Avoid_: custom, scripted, special-case
 
 **Review status**:
 Whether an Entry is `draft` or `approved`. Only approved Entries load into the game; an approved Entry may only reference approved Entries.
