@@ -26,6 +26,8 @@ type Config struct {
 	// creature does not react; configured per Campaign. Zero means
 	// DefaultReactionTimeout.
 	ReactionTimeout time.Duration
+	// Objects are the clickable objects placed on the Board.
+	Objects []ObjectSpec
 }
 
 // DefaultReactionTimeout applies when Config.ReactionTimeout is zero.
@@ -36,6 +38,9 @@ type creature struct {
 	hp           int
 	gone         bool // fled or surrendered: no longer in the combat
 	reactionUsed bool // regained at the start of the creature's own turn
+	dodging      bool // until the start of the creature's next turn
+	hideDC       int  // while hidden: the Stealth check total, the DC to find the creature
+	ready        *readied
 
 	dead                 bool
 	stable               bool // at 0 Hit Points, no Death Saving Throws
@@ -68,11 +73,18 @@ type Session struct {
 	log       []Event
 	timeout   time.Duration
 	pending   *pendingMove // a move paused on a reaction prompt
+
+	objects     map[ID]*object
+	objectOrder []ID
+	helpAttacks []helpAttack
+	helpChecks  []helpCheck
 }
 
 // pendingMove is a move in progress along its path. It pauses when a Player
 // Character's owner is prompted and resumes with Answer or Advance.
 type pendingMove struct {
+	mover    ID          // the active creature, or the Readier of a held move
+	reaction bool        // a Readied move: outside the mover's turn, no movement spent
 	path     []board.Pos // path[0] is the start square
 	i        int         // the step path[i] -> path[i+1] is being processed
 	checked  bool        // cand holds the reactors for the current step
@@ -126,6 +138,9 @@ func New(cfg Config) (*Session, error) {
 	if len(teams) < 2 {
 		return nil, fmt.Errorf("session: combat needs at least two teams")
 	}
+	if err := s.placeObjects(cfg.Objects); err != nil {
+		return nil, err
+	}
 	s.rollInitiative()
 	s.round = 1
 	s.startTurn(&s.log)
@@ -168,6 +183,14 @@ func (s *Session) startTurn(out *[]Event) {
 	s.movedFt, s.dashedFt = 0, 0
 	s.acted, s.bonused, s.disengage = false, false, false
 	c.reactionUsed = false
+	// Dodge and Help last "until the start of your next turn"; a Readied
+	// action can be taken "before the start of your next turn".
+	c.dodging = false
+	s.expireHelp(c.ID)
+	if c.ready != nil {
+		c.ready = nil
+		*out = append(*out, ReadyLapsed{Creature: c.ID})
+	}
 	*out = append(*out, TurnStarted{Creature: c.ID, Round: s.round})
 	if c.dying() {
 		*out = append(*out, s.deathSave(c)...)
@@ -227,6 +250,12 @@ func (s *Session) Submit(in Intent) ([]Event, error) {
 			return nil, err
 		}
 		out = ev
+	case Dodge, Help, HelpCheck, Hide, Search, Utilize, Ready:
+		ev, err := s.standardAction(in)
+		if err != nil {
+			return nil, err
+		}
+		out = ev
 	case Stand:
 		ev, err := s.stand(s.active())
 		if err != nil {
@@ -264,10 +293,11 @@ func (s *Session) Submit(in Intent) ([]Event, error) {
 
 func (s *Session) move(in Move) ([]Event, error) {
 	c := s.active()
-	if _, ok := s.reachable(c)[in.To]; !ok {
-		return nil, reject(Unreachable, "%v is not reachable with %d ft of movement left", in.To, s.movementLeft(c))
+	budget := s.movementLeft(c)
+	if _, ok := s.reachable(c, budget)[in.To]; !ok {
+		return nil, reject(Unreachable, "%v is not reachable with %d ft of movement left", in.To, budget)
 	}
-	m := &pendingMove{path: s.pathTo(c, in.To), startPos: c.Pos}
+	m := &pendingMove{mover: c.ID, path: s.pathTo(c, in.To, budget), startPos: c.Pos}
 	return s.runMove(m), nil
 }
 
@@ -278,7 +308,7 @@ func (s *Session) reactors(c *creature, a, b board.Pos) []ID {
 	var ids []ID
 	for _, id := range s.order {
 		o := s.creatures[id]
-		if o.Team == c.Team || o.out() || o.reactionUsed || o.incapacitated() || !inReach(o, a) || inReach(o, b) {
+		if o.Team == c.Team || o.out() || o.reactionUsed || o.incapacitated() || !inReach(o, a) || inReach(o, b) || c.hidden() {
 			continue
 		}
 		ids = append(ids, id)
@@ -291,16 +321,17 @@ func (s *Session) reactors(c *creature, a, b board.Pos) []ID {
 // that still has its Reaction may attack right before the mover leaves its
 // reach, unless the mover Disengaged; leaving and re-entering reach along the
 // path provokes again. A reactor set to ask pauses the move (s.pending).
-// "A creature that you can see" is not modeled yet (sight).
+// A hidden mover can't be seen, so it provokes none; other sight is not
+// modeled yet. When the move ends, Readied actions it set off run.
 func (s *Session) runMove(m *pendingMove) []Event {
-	c := s.active()
+	c := s.creatures[m.mover]
 	var out []Event
 	for m.i < len(m.path)-1 {
 		a, b := m.path[m.i], m.path[m.i+1]
 		if !m.checked {
 			m.checked = true
 			m.cand = nil
-			if !s.disengage {
+			if m.reaction || !s.disengage {
 				m.cand = s.reactors(c, a, b)
 			}
 		}
@@ -328,11 +359,18 @@ func (s *Session) runMove(m *pendingMove) []Event {
 		cost, _ := s.board.EntryCost(b)
 		c.Pos = b
 		m.costFt += cost * board.SquareFeet
-		s.movedFt += cost * board.SquareFeet
+		if !m.reaction {
+			s.movedFt += cost * board.SquareFeet
+		}
 		m.i++
 		m.checked = false
 	}
-	return append(out, Moved{Creature: c.ID, From: m.startPos, To: c.Pos, CostFt: m.costFt})
+	out = append(out, Moved{Creature: c.ID, From: m.startPos, To: c.Pos, CostFt: m.costFt})
+	out = append(out, s.fireReadied(c, m.startPos)...)
+	if !m.reaction && c.down() && !s.over && s.pending == nil {
+		out = append(out, s.endTurn()...)
+	}
+	return out
 }
 
 func (s *Session) opportunityAttack(o, mover *creature) []Event {
@@ -344,10 +382,10 @@ func (s *Session) opportunityAttack(o, mover *creature) []Event {
 // is over unless the combat ended with it.
 func (s *Session) moverDowned(m *pendingMove) []Event {
 	var out []Event
-	if c := s.active(); c.Pos != m.startPos {
+	if c := s.creatures[m.mover]; c.Pos != m.startPos {
 		out = append(out, Moved{Creature: c.ID, From: m.startPos, To: c.Pos, CostFt: m.costFt})
 	}
-	if !s.over {
+	if !s.over && !m.reaction {
 		out = append(out, s.endTurn()...)
 	}
 	return out
@@ -383,7 +421,7 @@ func (s *Session) Advance(d time.Duration) []Event {
 // resolvePrompt applies the answer and resumes the move. Submit logs the events
 // it returns, but Answer and Advance bypass Submit, so this logs its own.
 func (s *Session) resolvePrompt(m *pendingMove, react, timedOut bool) []Event {
-	c, o := s.active(), s.creatures[m.asked]
+	c, o := s.creatures[m.mover], s.creatures[m.asked]
 	s.pending = nil
 	m.cand = m.cand[1:]
 	var out []Event
@@ -461,6 +499,8 @@ func (s *Session) attack(in Attack) ([]Event, error) {
 		return nil, reject(InvalidTarget, "%s is not hostile", t.ID)
 	case t.out():
 		return nil, reject(InvalidTarget, "%s is down or gone", t.ID)
+	case t.hidden():
+		return nil, reject(InvalidTarget, "%s can't be seen", t.ID)
 	case !inReach(c, t.Pos):
 		return nil, reject(OutOfReach, "%s is %d ft away, beyond %s's %d ft reach",
 			t.ID, board.Distance(c.Pos, t.Pos)*board.SquareFeet, c.Attack.Name, c.Attack.ReachFt)
@@ -474,7 +514,15 @@ func (s *Session) resolveAttack(c, t *creature) []Event {
 	// Attack roll: hits if the total equals or exceeds AC; a natural 20 hits
 	// as a Critical Hit, a natural 1 misses (SRD "Playing the Game", Attack Rolls).
 	a := c.Attack
+	// Conditions (Invisible hider, Blinded...) come from attackMode; a Help given
+	// against the target adds Advantage, and a Dodging target Disadvantage.
 	adv, dis := attackMode(c, t)
+	if s.consumeHelpAttack(c, t) {
+		adv = true
+	}
+	if t.dodgeActive() {
+		dis = true
+	}
 	d20, mode := s.rollD20(adv, dis)
 	mod := a.ToHit - c.d20Penalty()
 	total := d20 + mod
@@ -486,6 +534,10 @@ func (s *Session) resolveAttack(c, t *creature) []Event {
 		Attacker: c.ID, Target: t.ID, Weapon: a.Name, D20: d20, Modifier: mod,
 		Total: total, AC: t.AC, Hit: hit, Critical: crit, Mode: mode,
 	}}
+	if c.hidden() {
+		// Hiding ends when you make an attack roll (SRD glossary, Hide).
+		out = append(out, s.reveal(c, "attack roll")...)
+	}
 	if !hit {
 		return out
 	}
@@ -557,16 +609,16 @@ func inReach(c *creature, p board.Pos) bool {
 // be passed through at normal cost but not ended in; a hostile creature's space
 // can't be entered ("Playing the Game", Moving around Other Creatures). Passing
 // hostile creatures two sizes apart or Incapacitated is not modeled yet.
-func (s *Session) reachable(c *creature) map[board.Pos]int {
-	cost, _ := s.search(c)
+func (s *Session) reachable(c *creature, budgetFt int) map[board.Pos]int {
+	cost, _ := s.search(c, budgetFt)
 	return cost
 }
 
 // pathTo returns the cheapest path from the creature's square to a reachable
 // square, both included. Equally cheap paths are not distinguished: the first
 // one found is used.
-func (s *Session) pathTo(c *creature, to board.Pos) []board.Pos {
-	_, prev := s.search(c)
+func (s *Session) pathTo(c *creature, to board.Pos, budgetFt int) []board.Pos {
+	_, prev := s.search(c, budgetFt)
 	path := []board.Pos{to}
 	for p := to; p != c.Pos; {
 		p = prev[p]
@@ -576,8 +628,8 @@ func (s *Session) pathTo(c *creature, to board.Pos) []board.Pos {
 	return path
 }
 
-func (s *Session) search(c *creature) (map[board.Pos]int, map[board.Pos]board.Pos) {
-	budget := s.movementLeft(c) / board.SquareFeet
+func (s *Session) search(c *creature, budgetFt int) (map[board.Pos]int, map[board.Pos]board.Pos) {
+	budget := budgetFt / board.SquareFeet
 	// Prone creatures crawl: each foot costs 1 extra foot (SRD "Rules Glossary",
 	// Crawling). A Frightened creature can't willingly move closer to the source
 	// of its fear.
@@ -606,7 +658,7 @@ func (s *Session) search(c *creature) (map[board.Pos]int, map[board.Pos]board.Po
 		for dx := -1; dx <= 1; dx++ {
 			for dy := -1; dy <= 1; dy++ {
 				next := board.Pos{X: cur.pos.X + dx, Y: cur.pos.Y + dy}
-				if next == cur.pos || !s.board.CanStep(cur.pos, next) {
+				if next == cur.pos || !s.board.CanStep(cur.pos, next) || s.blocked(next) {
 					continue
 				}
 				step, _ := s.board.EntryCost(next)
@@ -647,10 +699,12 @@ func (s *Session) State() State {
 			HP: c.hp, MaxHP: c.MaxHP, AC: c.AC, Down: c.down(),
 			Gone: c.gone, ReactionAvailable: !c.out() && !c.reactionUsed && !c.incapacitated(),
 			Dead: c.dead, Stable: c.stable, DeathSaveSuccesses: c.deathSucc, DeathSaveFailures: c.deathFail,
-			Conditions: c.conditions(), ExhaustionLevel: c.exhaustion}
+			Conditions: c.conditions(), ExhaustionLevel: c.exhaustion,
+			Dodging: c.dodgeActive(), Hidden: c.hidden(), Readied: c.ready != nil}
 	}
+	st.Objects = s.objectStates()
 	if m := s.pending; m != nil {
-		st.Pending = &PendingReaction{Creature: m.asked, Target: s.active().ID, Remaining: s.timeout - m.waited}
+		st.Pending = &PendingReaction{Creature: m.asked, Target: m.mover, Remaining: s.timeout - m.waited}
 	}
 	return st
 }
@@ -670,6 +724,7 @@ func (s *Session) LegalActions() LegalActions {
 	la.Dash, la.Disengage = la.Action, la.Action
 	la.NimbleEscape = can && c.NimbleEscape && !s.bonused
 	la.BonusAction = la.NimbleEscape // the only Bonus Action modeled so far
+	s.standardActionOptions(c, &la)
 	if c.own(CondProne) && c.speed() > 0 && c.speed()/2 <= la.MovementLeftFt {
 		la.Stand = true
 	}
@@ -680,7 +735,7 @@ func (s *Session) LegalActions() LegalActions {
 			}
 		}
 	}
-	for p, cost := range s.reachable(c) {
+	for p, cost := range s.reachable(c, la.MovementLeftFt) {
 		la.Moves = append(la.Moves, MoveOption{To: p, CostFt: cost})
 	}
 	slices.SortFunc(la.Moves, func(a, b MoveOption) int {
@@ -689,7 +744,7 @@ func (s *Session) LegalActions() LegalActions {
 	if la.Action {
 		for _, id := range s.order {
 			t := s.creatures[id]
-			if t.Team != c.Team && !t.out() && inReach(c, t.Pos) && !(c.has(CondCharmed) && c.conds[CondCharmed] == id) {
+			if t.Team != c.Team && !t.out() && !t.hidden() && inReach(c, t.Pos) && !(c.has(CondCharmed) && c.conds[CondCharmed] == id) {
 				la.Attacks = append(la.Attacks, AttackOption{Target: id, Weapon: c.Attack.Name})
 			}
 		}

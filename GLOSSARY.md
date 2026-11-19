@@ -88,6 +88,22 @@ _Avoid_: turn order (as the rule name)
 What a creature may spend on its turn: its movement (splittable around anything else), one action, one Bonus Action, and one Reaction that is regained at the start of its own turn.
 _Avoid_: AP, action points
 
+**Standard Actions**:
+The actions every creature has on its turn. Implemented so far: Attack, Dash, Disengage, Dodge, Help, Hide, Ready, Search and Utilize (Magic, Study and Influence come with spells and social play). Each spends the creature's one action.
+_Avoid_: basic actions, combat actions
+
+**Readied action**:
+A response a creature holds after taking the Ready action, released with its Reaction when its trigger occurs. It lapses at the start of the creature's next turn.
+_Avoid_: delayed action, overwatch
+
+**Board object**:
+A clickable thing placed on a Board (a door, chest or lever) that a creature within 5 feet uses with the Utilize action.
+_Avoid_: prop, interactable, item
+
+**Hidden**:
+The Invisible Condition a creature gains by succeeding at the Hide action. It ends when the creature attacks or an enemy finds it with the Search action. Enemies cannot choose a hidden creature as a target.
+_Avoid_: stealthed, concealed
+
 **Effect**:
 Something the rules engine applies to a creature outside its own turn's Intents, such as a trap, a spell or a ruling: inflicting or clearing a condition, damage, healing, a saving throw or an ability check. Applied through the game-session seam like an Intent, and answered with events. The declarative effects of spells and class features (#8) compile down to these.
 _Avoid_: trigger, hit

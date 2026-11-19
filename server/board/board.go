@@ -13,6 +13,9 @@ const (
 	Floor Terrain = iota
 	Wall
 	Difficult
+	// Obscured is floor that is Heavily Obscured (darkness, thick fog); a
+	// creature standing in it can try to Hide.
+	Obscured
 )
 
 // SquareFeet is the side of one square.
@@ -24,7 +27,8 @@ type Board struct {
 	cells []Terrain
 }
 
-// Parse builds a Board from text rows: '.' floor, '#' wall, '~' Difficult Terrain.
+// Parse builds a Board from text rows: '.' floor, '#' wall, '~' Difficult Terrain,
+// '%' Heavily Obscured floor.
 func Parse(rows []string) (*Board, error) {
 	if len(rows) == 0 {
 		return nil, fmt.Errorf("board: no rows")
@@ -42,6 +46,8 @@ func Parse(rows []string) (*Board, error) {
 				b.cells = append(b.cells, Wall)
 			case '~':
 				b.cells = append(b.cells, Difficult)
+			case '%':
+				b.cells = append(b.cells, Obscured)
 			default:
 				return nil, fmt.Errorf("board: unknown square %q at %d,%d", c, x, y)
 			}

@@ -79,6 +79,71 @@ type CreatureSpec struct {
 	MedicineMod int
 	// Reactions decides Opportunity Attacks; see ReactionRule.
 	Reactions ReactionRule
+	// PerceptionMod and StealthMod are the modifiers of Wisdom (Perception) and
+	// Dexterity (Stealth) checks, used by Search and Hide.
+	PerceptionMod int
+	StealthMod    int
+}
+
+// ObjectKind is what a clickable Board object is.
+type ObjectKind string
+
+const (
+	Door  ObjectKind = "door"
+	Chest ObjectKind = "chest"
+	Lever ObjectKind = "lever"
+)
+
+// ObjectSpec is a clickable object placed on the Board. A closed Door and any
+// Chest fill their square (nobody walks through); a Lever is set in a wall
+// square. A Lever's Controls names the Door it opens or closes.
+type ObjectSpec struct {
+	ID       ID
+	Kind     ObjectKind
+	Pos      board.Pos
+	Open     bool // Door or Chest starts open; Lever starts pulled
+	Controls ID
+}
+
+// Skills that Search, Hide and Help (ability check) work with.
+const (
+	Perception = "Perception"
+	Stealth    = "Stealth"
+)
+
+// TriggerKind is the perceivable circumstance a Readied action waits for.
+type TriggerKind int
+
+const (
+	// EnemyEntersReach: a hostile creature moves into the Readier's melee reach.
+	EnemyEntersReach TriggerKind = iota + 1
+	// EnemyEntersSquare: a hostile creature moves onto the square at Pos.
+	EnemyEntersSquare
+)
+
+// ReadyTrigger is the circumstance chosen when taking the Ready action.
+type ReadyTrigger struct {
+	Kind TriggerKind
+	Pos  board.Pos // EnemyEntersSquare
+}
+
+// ResponseKind is what the Readier does when the trigger occurs.
+type ResponseKind int
+
+const (
+	// RespondAttack: one melee attack against the creature that set off the trigger.
+	RespondAttack ResponseKind = iota + 1
+	// RespondMove: move up to Speed to the square To.
+	RespondMove
+	// RespondUtilize: take the Utilize action on Object.
+	RespondUtilize
+)
+
+// ReadyResponse is the action chosen when taking the Ready action.
+type ReadyResponse struct {
+	Kind   ResponseKind
+	To     board.Pos // RespondMove
+	Object ID        // RespondUtilize
 }
 
 // Ability is one of the six abilities.
@@ -154,6 +219,43 @@ type Disengage struct{ Actor ID }
 // NimbleEscape takes Disengage as a Bonus Action (creatures with the trait).
 type NimbleEscape struct{ Actor ID }
 
+// Dodge takes the Dodge action.
+type Dodge struct{ Actor ID }
+
+// Help takes the Help action to assist an attack roll: the next attack roll by
+// an ally against Target, an enemy within 5 feet of the actor, has Advantage.
+type Help struct {
+	Actor  ID
+	Target ID
+}
+
+// HelpCheck takes the Help action to assist an ability check: Ally, within 5
+// feet, has Advantage on its next check with Skill.
+type HelpCheck struct {
+	Actor ID
+	Ally  ID
+	Skill string
+}
+
+// Hide takes the Hide action.
+type Hide struct{ Actor ID }
+
+// Search takes the Search action: a Wisdom (Perception) check to find hidden creatures.
+type Search struct{ Actor ID }
+
+// Utilize takes the Utilize action on a Board object within 5 feet.
+type Utilize struct {
+	Actor  ID
+	Object ID
+}
+
+// Ready takes the Ready action: hold Response until Trigger, then spend the Reaction.
+type Ready struct {
+	Actor    ID
+	Trigger  ReadyTrigger
+	Response ReadyResponse
+}
+
 // Stand rights a Prone actor, spending half its Speed.
 type Stand struct{ Actor ID }
 
@@ -175,6 +277,13 @@ func (n NimbleEscape) actor() ID { return n.Actor }
 func (s Stand) actor() ID        { return s.Actor }
 func (s Stabilize) actor() ID    { return s.Actor }
 func (l Leave) actor() ID        { return l.Actor }
+func (d Dodge) actor() ID        { return d.Actor }
+func (h Help) actor() ID         { return h.Actor }
+func (h HelpCheck) actor() ID    { return h.Actor }
+func (h Hide) actor() ID         { return h.Actor }
+func (x Search) actor() ID       { return x.Actor }
+func (u Utilize) actor() ID      { return u.Actor }
+func (r Ready) actor() ID        { return r.Actor }
 func (e EndTurn) actor() ID      { return e.Actor }
 
 // Code classifies a rejected intent.
@@ -189,6 +298,7 @@ const (
 	CombatOver
 	BonusActionUsed
 	NoSuchOption
+	ObjectBlocked
 	Incapacitated
 	// AwaitingReaction: the game is paused until the pending prompt is answered.
 	AwaitingReaction
@@ -213,6 +323,8 @@ func (c Code) String() string {
 		return "BonusActionUsed"
 	case NoSuchOption:
 		return "NoSuchOption"
+	case ObjectBlocked:
+		return "ObjectBlocked"
 	case Incapacitated:
 		return "Incapacitated"
 	case AwaitingReaction:
@@ -302,6 +414,93 @@ type OpportunityAttackMade struct{ Attacker, Target ID }
 // CreatureLeft: the creature fled or surrendered and is out of the combat.
 type CreatureLeft struct{ Creature ID }
 
+// Dodged: until the start of its next turn, attacks against the creature have
+// Disadvantage and it has Advantage on Dexterity saving throws.
+type Dodged struct{ Creature ID }
+
+// Helped: the next attack roll by an ally against Target has Advantage.
+type Helped struct{ Creature, Target ID }
+
+// HelpedCheck: Ally has Advantage on its next check with Skill.
+type HelpedCheck struct {
+	Creature, Ally ID
+	Skill          string
+}
+
+// Hid is the result of a Hide action's Dexterity (Stealth) check.
+type Hid struct {
+	Creature ID
+	D20      int
+	Modifier int
+	Total    int
+	Mode     RollMode
+	Hidden   bool
+}
+
+// Revealed: the creature stopped being hidden (it made an attack roll).
+type Revealed struct {
+	Creature ID
+	Reason   string
+}
+
+// Searched is the result of a Search action's Wisdom (Perception) check;
+// Found lists the hidden enemies it discovered.
+type Searched struct {
+	Creature ID
+	D20      int
+	Modifier int
+	Total    int
+	Mode     RollMode
+	Found    []ID
+}
+
+// Readied: the creature holds an action until its trigger.
+type Readied struct {
+	Creature ID
+	Trigger  ReadyTrigger
+	Response ReadyResponse
+}
+
+// ReadyTriggered: the trigger occurred and the Reaction was spent; the
+// response events follow. Cause is the creature that set it off.
+type ReadyTriggered struct{ Creature, Cause ID }
+
+// ReadyFizzled: the held response could not be carried out.
+type ReadyFizzled struct {
+	Creature ID
+	Reason   string
+}
+
+// ReadyLapsed: the creature's next turn started with the trigger unmet.
+type ReadyLapsed struct{ Creature ID }
+
+// ObjectUsed: a creature used a Board object (Open is its state afterwards).
+type ObjectUsed struct {
+	Creature ID
+	Object   ID
+	Kind     ObjectKind
+	Open     bool
+}
+
+// ObjectChanged: a lever opened or closed the object it controls.
+type ObjectChanged struct {
+	Object ID
+	Open   bool
+}
+
+func (Dodged) event()         {}
+func (Helped) event()         {}
+func (HelpedCheck) event()    {}
+func (Hid) event()            {}
+func (Revealed) event()       {}
+func (Searched) event()       {}
+func (Readied) event()        {}
+func (ReadyTriggered) event() {}
+func (ReadyFizzled) event()   {}
+func (ReadyLapsed) event()    {}
+func (ObjectUsed) event()     {}
+func (ObjectChanged) event()  {}
+
 // ReactionPrompted: the game is paused and Creature's owner is asked whether
 // it makes an Opportunity Attack against Target, within Timeout.
 type ReactionPrompted struct {
@@ -356,6 +555,19 @@ type CreatureState struct {
 	Gone bool
 	// ReactionAvailable: the creature has not used its Reaction this round.
 	ReactionAvailable bool
+	// Dodging: the Dodge action's benefits are active.
+	Dodging bool
+	// Hidden: the creature has the Invisible condition from the Hide action.
+	Hidden bool
+	// Readied: the creature holds an action for a trigger.
+	Readied bool
+}
+
+// ObjectState is what everyone sees of a Board object.
+type ObjectState struct {
+	Kind ObjectKind
+	Pos  board.Pos
+	Open bool
 }
 
 // State is the visible state of the session.
@@ -364,6 +576,7 @@ type State struct {
 	Active    ID
 	Order     []ID
 	Creatures map[ID]CreatureState
+	Objects   map[ID]ObjectState
 	Over      bool
 	Winner    Team
 	// Pending is the reaction prompt the game is paused on, if any.
@@ -398,9 +611,19 @@ type LegalActions struct {
 	Moves                         []MoveOption
 	Attacks                       []AttackOption
 	Dash, Disengage               bool // standard actions, while the action is unspent
-	Stand                         bool // right a Prone creature
-	Stabilize                     []ID // creatures at 0 Hit Points within 5 feet
-	NimbleEscape                  bool // Bonus Action, while unspent
-	Leave                         bool
-	EndTurn                       bool
+	Dodge, Hide, Search, Ready    bool // standard actions, while the action is unspent
+	// HelpAttack lists the enemies within 5 feet; HelpCheck the allies within 5 feet.
+	HelpAttack, HelpCheck []ID
+	Utilize               []UtilizeOption
+	Stand                 bool // right a Prone creature
+	Stabilize             []ID // creatures at 0 Hit Points within 5 feet
+	NimbleEscape          bool // Bonus Action, while unspent
+	Leave                 bool
+	EndTurn               bool
+}
+
+// UtilizeOption is a Board object the active creature can Utilize.
+type UtilizeOption struct {
+	Object ID
+	Effect string // "open", "close" or "pull"
 }
