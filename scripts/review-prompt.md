@@ -6,8 +6,8 @@ Review on two axes, every item checked:
 
 **Spec**
 - Each acceptance criterion of issue #{{ISSUE}} is met, with a test that proves it.
-- Nothing is built beyond the issue's scope; deferrals are stated in the PR.
-- Every Ruleset mechanic matches the text in `reference/srd-5.2/` (the `ruleset` skill); check the numbers.
+- Scope: list every intent, event, mechanic and type the PR adds, and mark each as required by issue #{{ISSUE}} or belonging to another ticket (`gh issue list --label ready-for-agent --state all --json number,title`). Work that belongs to another ticket is a finding naming that ticket; deferrals are stated in the PR.
+- Every Ruleset mechanic the PR touches matches the text in `reference/srd-5.2/`: open the entry with `grep -n` and read it, then quote the sentence you checked in the finding or in a "Rules checked" list. A mechanic you did not read in the text is unreviewed; say so.
 
 **Standards**
 - Tests exercise behavior only through the game-session seam or the Forge seam.
