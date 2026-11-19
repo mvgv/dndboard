@@ -50,7 +50,7 @@ if [[ $DETACH == 1 ]]; then
   extra=""
   [[ -n $FEEDBACK_FILE ]] && extra="--feedback-file '$FEEDBACK_FILE'"
   tmux new-window -d -t tickets -n "t$N" \
-    "MAX_ATTEMPTS=$MAX_ATTEMPTS WAIT_MIN=$WAIT_MIN MAX_FEEDBACK=$MAX_FEEDBACK '$MAIN/scripts/run-ticket.sh' $N --model $MODEL $extra"
+    "MAX_ATTEMPTS=$MAX_ATTEMPTS WAIT_MIN=$WAIT_MIN MAX_FEEDBACK=$MAX_FEEDBACK '$MAIN/scripts/run-ticket.sh' $N --model $MODEL $extra 2>>'$LOG'"
   echo "Started issue #$N in tmux session 'tickets', window t$N. Log: $LOG"
   exit 0
 fi

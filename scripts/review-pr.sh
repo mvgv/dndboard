@@ -33,7 +33,7 @@ LOG=$WS/logs/review-$PR.log
 if [[ $DETACH == 1 ]]; then
   command -v tmux >/dev/null || { echo "tmux not found" >&2; exit 1; }
   tmux has-session -t tickets 2>/dev/null || tmux new-session -d -s tickets -n home
-  tmux new-window -d -t tickets -n "r$PR" "'$MAIN/scripts/review-pr.sh' $PR --model $MODEL"
+  tmux new-window -d -t tickets -n "r$PR" "'$MAIN/scripts/review-pr.sh' $PR --model $MODEL 2>>'$LOG'"
   echo "Started review of PR #$PR in tmux session 'tickets', window r$PR. Log: $LOG"
   exit 0
 fi

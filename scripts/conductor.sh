@@ -36,10 +36,14 @@ SCRIPTS=$MAIN/scripts
 
 log() { echo "[$(date '+%F %T')] $*" | tee -a "$LOG"; }
 act() { if [[ $DRY_RUN == 1 ]]; then log "DRY-RUN: $*"; else "$@"; fi; }
-once() { # once <key>: true the first time a key is seen
-  [[ -e $STATE/$1 ]] && return 1
-  [[ $DRY_RUN == 1 ]] || touch "$STATE/$1"
-  return 0
+once() { # once <key> <command...>: run it the first time; remember the key only if it succeeded
+  local key=$1; shift
+  [[ -e $STATE/$key ]] && return 0
+  if "$@"; then
+    [[ $DRY_RUN == 1 ]] || touch "$STATE/$key"
+  else
+    log "Failed ($key), will retry next run: $*"
+  fi
 }
 
 if command -v flock >/dev/null; then
@@ -68,6 +72,10 @@ feedback() { # feedback <issue> <text>
   printf '%s\n' "$2" > "$f"
   act "$SCRIPTS/run-ticket.sh" "$1" --model "$(model_for "$1")" --detach --feedback-file "$f"
 }
+ready_label() { # ready_label <reason>; uses $PR
+  log "$1"
+  act gh pr edit "$PR" -R "$REPO" --add-label ready-to-merge
+}
 
 # ---------------------------------------------------------------- PRs
 FAIL_RE='FAILURE|ERROR|CANCELLED|TIMED_OUT|ACTION_REQUIRED|STARTUP_FAILURE'
@@ -93,19 +101,19 @@ while read -r PR BRANCH <&3; do
   log "PR #$PR (#$N) ${SHA:0:7}: ci=$ci mergeable=$mergeable state=$mstate"
 
   if [[ $mergeable == CONFLICTING ]]; then
-    once "conflict-pr$PR-$SHA" && feedback "$N" "PR #$PR has merge conflicts with main. Merge origin/main into $BRANCH, resolve the conflicts keeping the intent of both sides, run the checks, and push."
+    once "conflict-pr$PR-$SHA" feedback "$N" "PR #$PR has merge conflicts with main. Merge origin/main into $BRANCH, resolve the conflicts keeping the intent of both sides, run the checks, and push."
     continue
   fi
   if [[ $ci == failure ]]; then
     failed=$(pv statusCheckRollup ".statusCheckRollup | [.[] | select((.conclusion // .state // \"\") | test(\"$FAIL_RE\")) | \"- \(.name // .context): \(.detailsUrl // .targetUrl // \"\")\"] | join(\"\n\")")
-    once "ci-pr$PR-$SHA" && feedback "$N" "CI failed on PR #$PR at commit ${SHA:0:7}:
+    once "ci-pr$PR-$SHA" feedback "$N" "CI failed on PR #$PR at commit ${SHA:0:7}:
 $failed
 
 Read the failing logs (gh run view <run-id> --log-failed), fix the cause, run the checks locally, and push."
     continue
   fi
   if [[ $mstate == BEHIND ]]; then
-    once "update-pr$PR-$SHA" && act gh pr update-branch "$PR" -R "$REPO"
+    once "update-pr$PR-$SHA" act gh pr update-branch "$PR" -R "$REPO"
     continue
   fi
 
@@ -117,7 +125,7 @@ Read the failing logs (gh run view <run-id> --log-failed), fix the cause, run th
     continue
   fi
   if [[ $verdict == changes ]]; then
-    once "review-pr$PR-$SHA" && feedback "$N" "The independent review of PR #$PR at commit ${SHA:0:7} asked for changes. Address every blocking finding, run the checks, push, and reply on the PR summarizing what changed.
+    once "review-pr$PR-$SHA" feedback "$N" "The independent review of PR #$PR at commit ${SHA:0:7} asked for changes. Address every blocking finding, run the checks, push, and reply on the PR summarizing what changed.
 
 $review"
     continue
@@ -125,7 +133,7 @@ $review"
 
   # verdict == pass
   if [[ $ci == none ]]; then
-    once "noci-pr$PR-$SHA" && { log "PR #$PR: no CI checks, so no automatic merge (ADR 0006)."; act gh pr edit "$PR" -R "$REPO" --add-label ready-to-merge; }
+    once "noci-pr$PR-$SHA" ready_label "PR #$PR: no CI checks, so no automatic merge (ADR 0006)."
     continue
   fi
   if [[ $ci != success || $mergeable != MERGEABLE ]]; then
@@ -140,7 +148,7 @@ $review"
     act gh pr merge "$PR" -R "$REPO" --merge
     act gh api -X DELETE "repos/$REPO/git/refs/heads/$BRANCH" --silent || true
   else
-    once "ready-pr$PR-$SHA" && { log "PR #$PR: gates passed but door=${door:-?} blast=${blast:-?}; leaving the merge to the owner."; act gh pr edit "$PR" -R "$REPO" --add-label ready-to-merge; }
+    once "ready-pr$PR-$SHA" ready_label "PR #$PR: gates passed but door=${door:-?} blast=${blast:-?}; leaving the merge to the owner."
   fi
 done 3<<< "$prs"
 
