@@ -38,7 +38,10 @@ type helpCheck struct {
 	skill        string
 }
 
-type object struct{ ObjectSpec }
+type object struct {
+	ObjectSpec
+	found bool // a Secret door that has been discovered
+}
 
 // hidden reports whether the creature is hidden: it has the Invisible condition
 // from a successful Hide action.
@@ -58,7 +61,7 @@ func (s *Session) reveal(c *creature, reason string) []Event {
 // rollCheck rolls an ability check for c, spending a Help it was given for
 // skill. Poisoned and Frightened give Disadvantage; Exhaustion lowers the total
 // through the caller's modifier (see d20Penalty).
-func (s *Session) rollCheck(c *creature, skill string) (d20 int, mode RollMode) {
+func (s *Session) rollCheck(c *creature, skill string, extraDisadvantage bool) (d20 int, mode RollMode) {
 	adv := false
 	for i, h := range s.helpChecks {
 		if h.ally == c.ID && h.skill == skill {
@@ -67,7 +70,7 @@ func (s *Session) rollCheck(c *creature, skill string) (d20 int, mode RollMode) 
 			break
 		}
 	}
-	return s.rollD20(adv, c.checkDisadvantage())
+	return s.rollD20(adv, c.checkDisadvantage() || extraDisadvantage)
 }
 
 // consumeHelpAttack spends one Help given to c's team against t, if any.
@@ -139,7 +142,7 @@ func (s *Session) standardAction(in Intent) ([]Event, error) {
 		if s.board.At(c.Pos) != board.Obscured {
 			return nil, reject(NoSuchOption, "%s is not Heavily Obscured, so it can't Hide", c.ID)
 		}
-		d20, mode := s.rollCheck(c, Stealth)
+		d20, mode := s.rollCheck(c, Stealth, false)
 		mod := c.StealthMod - c.d20Penalty()
 		total := d20 + mod
 		ok := total >= hideDC
@@ -154,20 +157,43 @@ func (s *Session) standardAction(in Intent) ([]Event, error) {
 			out = append(out, ev...)
 		}
 	case Search:
-		d20, mode := s.rollCheck(c, Perception)
-		mod := c.PerceptionMod - c.d20Penalty()
-		total := d20 + mod
-		var found []ID
-		for _, id := range s.order {
-			if o := s.creatures[id]; o.Team != c.Team && o.hidden() && total >= o.hideDC {
-				out = append(out, s.reveal(o, "found by Search")...)
-				found = append(found, id)
+		// One Wisdom (Perception) check finds hidden creatures and the traps and
+		// secret doors in sight on lit squares. What lies on a Dim Light square
+		// is Lightly Obscured, so it takes its own check with Disadvantage.
+		dim, lit := s.searchTargets(c)
+		ambushers := slices.ContainsFunc(s.order, func(id ID) bool {
+			o := s.creatures[id]
+			return o.Team != c.Team && o.hidden()
+		})
+		search := func(dis, dimSquares, creatures bool) {
+			d20, mode := s.rollCheck(c, Perception, dis)
+			mod := c.PerceptionMod - c.d20Penalty()
+			total := d20 + mod
+			var found []ID
+			var rest []Event
+			if creatures {
+				for _, id := range s.order {
+					if o := s.creatures[id]; o.Team != c.Team && o.hidden() && total >= o.hideDC {
+						rest = append(rest, s.reveal(o, "found by Search")...)
+						found = append(found, id)
+					}
+				}
 			}
+			rest = append(rest, s.discover(c, false, func(p board.Pos, dc int) bool {
+				return s.dimFor(c, p) == dimSquares && total >= dc
+			})...)
+			out = append(out, Searched{Creature: c.ID, D20: d20, Modifier: mod, Total: total, Mode: mode, Found: found})
+			out = append(out, rest...)
 		}
-		out = append([]Event{Searched{Creature: c.ID, D20: d20, Modifier: mod, Total: total, Mode: mode, Found: found}}, out...)
+		if lit || ambushers || !dim {
+			search(false, false, true)
+		}
+		if dim {
+			search(true, true, false)
+		}
 	case Utilize:
 		o, ok := s.objects[in.Object]
-		if !ok {
+		if !ok || !o.known() {
 			return nil, reject(InvalidTarget, "no object %q", in.Object)
 		}
 		ev, rej := s.useObject(c, o)
@@ -203,7 +229,7 @@ func (s *Session) validReady(in Ready) *Rejection {
 			return reject(NoSuchOption, "%v is not a square a creature can enter", in.Response.To)
 		}
 	case RespondUtilize:
-		if _, ok := s.objects[in.Response.Object]; !ok {
+		if o, ok := s.objects[in.Response.Object]; !ok || !o.known() {
 			return reject(InvalidTarget, "no object %q", in.Response.Object)
 		}
 	default:
@@ -285,10 +311,17 @@ func (s *Session) placeObjects(specs []ObjectSpec) error {
 			}
 		}
 		wall := s.board.At(sp.Pos) == board.Wall
+		if sp.Secret && (sp.Kind != Door || !wall || sp.Open) {
+			return fmt.Errorf("session: secret door %q must be a closed door set in a wall at %v", sp.ID, sp.Pos)
+		}
 		switch sp.Kind {
 		case Door, Chest:
-			if wall {
+			if wall && !sp.Secret {
 				return fmt.Errorf("session: %s %q is on a wall at %v", sp.Kind, sp.ID, sp.Pos)
+			}
+			if sp.Secret {
+				// Walkable once found; until then its closed state blocks.
+				s.board = s.board.With(sp.Pos, board.Floor)
 			}
 			for _, c := range s.creatures {
 				if c.Pos == sp.Pos && (sp.Kind == Chest || !sp.Open) {
@@ -305,7 +338,7 @@ func (s *Session) placeObjects(specs []ObjectSpec) error {
 		if sp.Controls != "" && sp.Kind != Lever {
 			return fmt.Errorf("session: only a lever controls an object, not %q", sp.ID)
 		}
-		s.objects[sp.ID] = &object{sp}
+		s.objects[sp.ID] = &object{ObjectSpec: sp}
 		s.objectOrder = append(s.objectOrder, sp.ID)
 	}
 	for _, o := range s.objects {
@@ -409,7 +442,7 @@ func (s *Session) standardActionOptions(c *creature, la *LegalActions) {
 	}
 	for _, id := range s.objectOrder {
 		o := s.objects[id]
-		if board.Distance(c.Pos, o.Pos) > 1 {
+		if !o.known() || board.Distance(c.Pos, o.Pos) > 1 {
 			continue
 		}
 		if e := s.utilizeEffect(o); e != "" {

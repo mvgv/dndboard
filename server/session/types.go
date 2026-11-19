@@ -83,6 +83,11 @@ type CreatureSpec struct {
 	// Dexterity (Stealth) checks, used by Search and Hide.
 	PerceptionMod int
 	StealthMod    int
+	// DarkvisionFt is the range of Darkvision, 0 for none.
+	DarkvisionFt int
+	// HiddenDC, when positive, starts the creature hidden (an ambusher) with
+	// that DC to find it.
+	HiddenDC int
 }
 
 // ObjectKind is what a clickable Board object is.
@@ -103,6 +108,10 @@ type ObjectSpec struct {
 	Pos      board.Pos
 	Open     bool // Door or Chest starts open; Lever starts pulled
 	Controls ID
+	// Secret makes a closed Door set in a wall: it is part of the wall, known
+	// to no client, until found with a Wisdom (Perception) total of DC or more.
+	Secret bool
+	DC     int
 }
 
 // Skills that Search, Hide and Help (ability check) work with.

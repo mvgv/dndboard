@@ -28,6 +28,13 @@ type Config struct {
 	ReactionTimeout time.Duration
 	// Objects are the clickable objects placed on the Board.
 	Objects []ObjectSpec
+	// Ambient is the light everywhere before light sources; the zero value is
+	// Bright.
+	Ambient Light
+	// Lights are the light sources placed on the Board.
+	Lights []LightSource
+	// Traps are hidden until found.
+	Traps []TrapSpec
 }
 
 // DefaultReactionTimeout applies when Config.ReactionTimeout is zero.
@@ -78,6 +85,11 @@ type Session struct {
 	objectOrder []ID
 	helpAttacks []helpAttack
 	helpChecks  []helpCheck
+
+	ambient   Light
+	lights    []LightSource
+	traps     map[ID]*trap
+	trapOrder []ID
 }
 
 // pendingMove is a move in progress along its path. It pauses when a Player
@@ -131,6 +143,10 @@ func New(cfg Config) (*Session, error) {
 				c.conds[k] = ""
 			}
 		}
+		if spec.HiddenDC > 0 {
+			c.conds[CondInvisible] = ""
+			c.hideDC = spec.HiddenDC
+		}
 		s.creatures[spec.ID] = c
 		s.order = append(s.order, spec.ID)
 		teams[spec.Team] = true
@@ -141,9 +157,14 @@ func New(cfg Config) (*Session, error) {
 	if err := s.placeObjects(cfg.Objects); err != nil {
 		return nil, err
 	}
+	s.ambient, s.lights = cfg.Ambient, slices.Clone(cfg.Lights)
+	if err := s.placeTraps(cfg.Traps); err != nil {
+		return nil, err
+	}
 	s.rollInitiative()
 	s.round = 1
 	s.startTurn(&s.log)
+	s.log = append(s.log, s.detectPassive()...)
 	return s, nil
 }
 
@@ -287,6 +308,7 @@ func (s *Session) Submit(in Intent) ([]Event, error) {
 	default:
 		return nil, fmt.Errorf("session: unknown intent %T", in)
 	}
+	out = append(out, s.detectPassive()...)
 	s.log = append(s.log, out...)
 	return out, nil
 }
@@ -439,6 +461,7 @@ func (s *Session) resolvePrompt(m *pendingMove, react, timedOut bool) []Event {
 		out = []Event{ReactionDeclined{Creature: o.ID}}
 	}
 	out = append(out, s.runMove(m)...)
+	out = append(out, s.detectPassive()...)
 	s.log = append(s.log, out...)
 	return out
 }
@@ -499,7 +522,7 @@ func (s *Session) attack(in Attack) ([]Event, error) {
 		return nil, reject(InvalidTarget, "%s is not hostile", t.ID)
 	case t.out():
 		return nil, reject(InvalidTarget, "%s is down or gone", t.ID)
-	case t.hidden():
+	case !s.targetable(c, t):
 		return nil, reject(InvalidTarget, "%s can't be seen", t.ID)
 	case !inReach(c, t.Pos):
 		return nil, reject(OutOfReach, "%s is %d ft away, beyond %s's %d ft reach",
@@ -744,7 +767,7 @@ func (s *Session) LegalActions() LegalActions {
 	if la.Action {
 		for _, id := range s.order {
 			t := s.creatures[id]
-			if t.Team != c.Team && !t.out() && !t.hidden() && inReach(c, t.Pos) && !(c.has(CondCharmed) && c.conds[CondCharmed] == id) {
+			if t.Team != c.Team && !t.out() && s.targetable(c, t) && inReach(c, t.Pos) && !(c.has(CondCharmed) && c.conds[CondCharmed] == id) {
 				la.Attacks = append(la.Attacks, AttackOption{Target: id, Weapon: c.Attack.Name})
 			}
 		}
