@@ -63,7 +63,9 @@ const (
 // damage risked at the square it ends on and on the way, and its first step is
 // the choice. It knows a creature only by its CreatureSpec and what the session
 // shows everyone. Support actions (Help, Hide, Search, Ready, Utilize, Stabilize,
-// Dash) are not modeled yet, so it never chooses them.
+// Dash) are not modeled yet, so it never chooses them. Estimates also ignore
+// Resistances and the automatic Critical Hit on a Paralyzed or Unconscious
+// target within 5 feet, so they underestimate damage against such targets.
 type Utility struct {
 	specs map[session.ID]session.CreatureSpec
 	pers  map[session.ID]Personality
@@ -375,13 +377,26 @@ func strike(a foe, d session.CreatureState) (exp, drop float64) {
 	return exp, p * kill
 }
 
+// attackModes is a deliberate approximation of the Conditions' effects on an
+// attack roll: sight and line of sight are not modeled, so Frightened (which
+// needs the source of fear in view) and Invisible (which matters when the other
+// creature can't see it) apply unconditionally, and Dodge's "if you can see the
+// attacker" is assumed true. A Prone target gives Advantage only to an attacker
+// within 5 feet, and Disadvantage otherwise (SRD "Rules Glossary", Prone).
 func attackModes(a, d session.CreatureState) (adv, dis bool) {
 	for _, k := range []session.Condition{session.CondPoisoned, session.CondFrightened, session.CondBlinded, session.CondProne, session.CondRestrained} {
 		dis = dis || has(a, k)
 	}
 	adv = has(a, session.CondInvisible)
-	for _, k := range []session.Condition{session.CondBlinded, session.CondParalyzed, session.CondRestrained, session.CondStunned, session.CondUnconscious, session.CondPetrified, session.CondProne} {
+	for _, k := range []session.Condition{session.CondBlinded, session.CondParalyzed, session.CondRestrained, session.CondStunned, session.CondUnconscious, session.CondPetrified} {
 		adv = adv || has(d, k)
+	}
+	if has(d, session.CondProne) {
+		if board.Distance(a.Pos, d.Pos)*board.SquareFeet <= 5 {
+			adv = true
+		} else {
+			dis = true
+		}
 	}
 	dis = dis || d.Dodging || has(d, session.CondInvisible)
 	return adv, dis

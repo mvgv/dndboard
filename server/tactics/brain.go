@@ -76,7 +76,9 @@ func PlayTurn(s *session.Session, b Brain) ([]session.Event, error) {
 }
 
 // Legal reports whether the intent is one of the Legal Actions. It is the check
-// that keeps every brain, however clever, inside the rules.
+// that keeps every brain, however clever, inside the rules. It mirrors the
+// session's validation per intent type and fails closed: a new intent type is
+// illegal here until a case is added for it.
 func Legal(la session.LegalActions, in session.Intent) bool {
 	if in == nil {
 		return false
