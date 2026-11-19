@@ -634,9 +634,9 @@ func TestMonsterDiesAtZeroHitPoints(t *testing.T) {
 func party(t *testing.T, rest ...int) *session.Session {
 	t.Helper()
 	p1 := mk("p1", "P", 1, 2)
-	p1.Character = true
+	p1.PlayerCharacter = true
 	p2 := mk("p2", "P", 1, 3)
-	p2.Character = true
+	p2.PlayerCharacter = true
 	return begin(t, rest, p1, mk("m", "M", 2, 2), p2)
 }
 
@@ -787,7 +787,7 @@ func TestDamageEqualToMaximumAtZeroHitPointsKills(t *testing.T) {
 
 func TestImmuneDamageAtZeroHitPointsIsNotDamage(t *testing.T) {
 	p1 := mk("p1", "P", 1, 2)
-	p1.Character, p1.Immunities = true, []string{"poison"}
+	p1.PlayerCharacter, p1.Immunities = true, []string{"poison"}
 	s := begin(t, nil, p1, mk("m", "M", 2, 2), mk("p2", "P", 1, 3))
 	apply(t, s, session.InflictDamage{Target: "p1", Amount: 25, Type: "fire"})
 	ev := apply(t, s, session.InflictDamage{Target: "p1", Amount: 5, Type: "poison"})

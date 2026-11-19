@@ -65,7 +65,7 @@ func (c *creature) incapacitated() bool { return c.has(CondIncapacitated) }
 // defeated: no longer able to fight on, for deciding when a combat is over.
 func (c *creature) defeated() bool { return c.out() || c.down() }
 
-func (c *creature) dying() bool { return c.Character && c.down() && !c.dead && !c.stable }
+func (c *creature) dying() bool { return c.PlayerCharacter && c.down() && !c.dead && !c.stable }
 
 // rollD20 rolls a d20 with Advantage or Disadvantage; both cancel out.
 func (s *Session) rollD20(adv, dis bool) (int, RollMode) {
@@ -78,7 +78,7 @@ func (s *Session) rollD20(adv, dis bool) (int, RollMode) {
 	return s.dice.Roll(20), Normal
 }
 
-// checkMode is the Advantage state of an ability check (SRD "Rules Glossary":
+// checkDisadvantage reports Disadvantage on ability checks of an ability check (SRD "Rules Glossary":
 // Poisoned and Frightened give Disadvantage on ability checks; Frightened's
 // line of sight to the source is not modeled, so the source is always in sight).
 func (c *creature) checkDisadvantage() bool {
@@ -287,13 +287,13 @@ func (s *Session) applyDamage(t *creature, d DamageDealt, crit bool) []Event {
 		out = append(out, CreatureDowned{Creature: t.ID})
 		// Monsters die at 0; a character dies if the damage left over equals or
 		// exceeds their Hit Point maximum (Massive Damage).
-		if !t.Character || d.Amount-before >= t.MaxHP {
+		if !t.PlayerCharacter || d.Amount-before >= t.MaxHP {
 			out = append(out, s.die(t)...)
 		} else {
 			t.deathSucc, t.deathFail, t.stable = 0, 0, false
 			out = append(out, s.inflict(t, CondUnconscious, "")...)
 		}
-	case before == 0 && t.Character:
+	case before == 0 && t.PlayerCharacter:
 		// Damage at 0 Hit Points: a failure, two on a Critical Hit; death if it
 		// equals or exceeds the Hit Point maximum. A Stable creature starts
 		// making Death Saving Throws again.

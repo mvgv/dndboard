@@ -89,7 +89,7 @@ What a creature may spend on its turn: its movement (splittable around anything 
 _Avoid_: AP, action points
 
 **Effect**:
-Something the rules engine applies to a creature outside its own turn's Intents, such as a trap, a spell or a ruling: inflicting or clearing a condition, damage, healing, a saving throw or an ability check. Applied through the game-session seam like an Intent, and answered with events.
+Something the rules engine applies to a creature outside its own turn's Intents, such as a trap, a spell or a ruling: inflicting or clearing a condition, damage, healing, a saving throw or an ability check. Applied through the game-session seam like an Intent, and answered with events. The declarative effects of spells and class features (#8) compile down to these.
 _Avoid_: trigger, hit
 
 **Condition**:

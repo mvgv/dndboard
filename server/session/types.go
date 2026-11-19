@@ -42,10 +42,11 @@ type CreatureSpec struct {
 	// NimbleEscape lets the creature take Disengage as a Bonus Action (SRD
 	// "Monsters", Nimble Escape; Hide is not modeled yet).
 	NimbleEscape bool
-	// Character marks a Player Character: at 0 Hit Points it falls Unconscious
-	// and makes Death Saving Throws instead of dying outright (SRD "Playing the
-	// Game", Dropping to 0 Hit Points). Monsters die the instant they drop to 0.
-	Character bool
+	// PlayerCharacter marks a Player Character: at 0 Hit Points it falls
+	// Unconscious and makes Death Saving Throws instead of dying outright (SRD
+	// "Playing the Game", Dropping to 0 Hit Points). Monsters die the instant
+	// they drop to 0.
+	PlayerCharacter bool
 	// Resistances, Vulnerabilities and Immunities name damage types (SRD
 	// "Playing the Game", Resistance and Vulnerability).
 	Resistances, Vulnerabilities, Immunities []string
