@@ -322,7 +322,38 @@ func TestFleeingCreatureIsSkippedAndCombatContinues(t *testing.T) {
 	if got := s.State().Active; got != "g2" {
 		t.Fatalf("active = %v, want g2 (g1 gone)", got)
 	}
-	if r := rejection(t, s, session.Attack{Actor: "g2", Target: "g1"}); r.Code == 0 {
-		t.Fatal("expected rejection")
+	if r := rejection(t, s, session.Attack{Actor: "g2", Target: "g1"}); r.Code != session.InvalidTarget {
+		t.Fatalf("attacking a creature that left: code = %v, want InvalidTarget", r.Code)
+	}
+}
+
+// The mover downed by an Opportunity Attack loses the rest of its turn when the
+// combat goes on: the turn passes and the downed creature can no longer act.
+func TestMoverDownedByOpportunityAttackPassesTheTurnWhenCombatContinues(t *testing.T) {
+	f1 := fighter("f1", 5, 2)
+	f1.MaxHP = 1
+	// Initiative: f1 21, f2 11, g1 7. Reaction attack: 15+4 = 19 vs AC 16 hits, 3+2 = 5.
+	s := start(t, dice.Fixed(20, 10, 5, 15, 3), f1, fighter("f2", 1, 1), goblin("g1", 4, 2))
+	ev := submit(t, s, session.Move{Actor: "f1", To: pos(8, 2)})
+	if _, ok := find[session.CombatEnded](ev); ok {
+		t.Fatal("f2 is still standing")
+	}
+	if _, ok := find[session.Moved](ev); ok {
+		t.Fatal("a downed creature must not complete its move")
+	}
+	if _, ok := find[session.TurnEnded](ev); !ok {
+		t.Fatalf("the downed mover's turn must end, events %+v", ev)
+	}
+	if got := s.State().Active; got != "f2" {
+		t.Fatalf("active = %v, want f2", got)
+	}
+	for _, in := range []session.Intent{
+		session.Attack{Actor: "f1", Target: "g1"},
+		session.Move{Actor: "f1", To: pos(6, 2)},
+		session.Dash{Actor: "f1"},
+	} {
+		if r := rejection(t, s, in); r.Code != session.NotYourTurn {
+			t.Errorf("%T from the downed creature: code = %v, want NotYourTurn", in, r.Code)
+		}
 	}
 }

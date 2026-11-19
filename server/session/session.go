@@ -217,7 +217,12 @@ func (s *Session) move(in Move) ([]Event, error) {
 			out = append(out, OpportunityAttackMade{Attacker: o.ID, Target: c.ID})
 			out = append(out, s.resolveAttack(o, c)...)
 			if c.down() {
-				return out, nil // the mover never leaves its square
+				// The mover never leaves its square, and a downed creature's
+				// turn is over unless the combat ended with it.
+				if !s.over {
+					out = append(out, s.endTurn()...)
+				}
+				return out, nil
 			}
 		}
 	}
@@ -280,7 +285,6 @@ func (s *Session) attack(in Attack) ([]Event, error) {
 
 // resolveAttack makes one attack of c against t and applies the result.
 func (s *Session) resolveAttack(c, t *creature) []Event {
-
 	// Attack roll: hits if the total equals or exceeds AC; a natural 20 hits
 	// as a Critical Hit, a natural 1 misses (SRD "Playing the Game", Attack Rolls).
 	a := c.Attack
