@@ -30,7 +30,7 @@ func Fighter() session.CreatureSpec {
 
 // GoblinWarrior is the SRD 5.2 "Monsters" Goblin Warrior: AC 15, HP 10,
 // Speed 30 ft., Initiative +2, Scimitar: Melee Attack Roll +4, reach 5 ft.,
-// Hit: 5 (1d6 + 2) Slashing damage.
+// Hit: 5 (1d6 + 2) Slashing damage. Bonus Action: Nimble Escape (Disengage or Hide).
 func GoblinWarrior() session.CreatureSpec {
 	return session.CreatureSpec{
 		Name:          "Goblin Warrior",
@@ -39,6 +39,7 @@ func GoblinWarrior() session.CreatureSpec {
 		MaxHP:         10,
 		SpeedFt:       30,
 		InitiativeMod: 2,
+		NimbleEscape:  true, // Bonus Action: Disengage (Hide is not modeled yet)
 		Attack: session.MeleeAttack{
 			Name: "Scimitar", ToHit: 4, DiceCount: 1, DiceSides: 6,
 			DamageBonus: 2, DamageType: "Slashing", ReachFt: 5,

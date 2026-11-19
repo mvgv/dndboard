@@ -35,6 +35,13 @@ type CreatureSpec struct {
 	SpeedFt       int
 	InitiativeMod int
 	Attack        MeleeAttack
+	// Group names a set of identical creatures that share one Initiative roll.
+	Group string
+	// Surprised gives Disadvantage on the Initiative roll.
+	Surprised bool
+	// NimbleEscape lets the creature take Disengage as a Bonus Action (SRD
+	// "Monsters", Nimble Escape; Hide is not modeled yet).
+	NimbleEscape bool
 }
 
 // Intent is what a Player (or a monster's tactics) asks the active creature to do.
@@ -52,12 +59,28 @@ type Attack struct {
 	Target ID
 }
 
+// Dash takes the Dash action: extra movement equal to Speed this turn.
+type Dash struct{ Actor ID }
+
+// Disengage takes the Disengage action: no Opportunity Attacks this turn.
+type Disengage struct{ Actor ID }
+
+// NimbleEscape takes Disengage as a Bonus Action (creatures with the trait).
+type NimbleEscape struct{ Actor ID }
+
+// Leave withdraws the actor from the combat (fled or surrendered) and ends its turn.
+type Leave struct{ Actor ID }
+
 // EndTurn ends the actor's turn.
 type EndTurn struct{ Actor ID }
 
-func (m Move) actor() ID    { return m.Actor }
-func (a Attack) actor() ID  { return a.Actor }
-func (e EndTurn) actor() ID { return e.Actor }
+func (m Move) actor() ID         { return m.Actor }
+func (a Attack) actor() ID       { return a.Actor }
+func (d Dash) actor() ID         { return d.Actor }
+func (d Disengage) actor() ID    { return d.Actor }
+func (n NimbleEscape) actor() ID { return n.Actor }
+func (l Leave) actor() ID        { return l.Actor }
+func (e EndTurn) actor() ID      { return e.Actor }
 
 // Code classifies a rejected intent.
 type Code int
@@ -69,6 +92,8 @@ const (
 	InvalidTarget
 	ActionUsed
 	CombatOver
+	BonusActionUsed
+	NoSuchOption
 )
 
 func (c Code) String() string {
@@ -85,6 +110,10 @@ func (c Code) String() string {
 		return "ActionUsed"
 	case CombatOver:
 		return "CombatOver"
+	case BonusActionUsed:
+		return "BonusActionUsed"
+	case NoSuchOption:
+		return "NoSuchOption"
 	}
 	return fmt.Sprintf("Code(%d)", int(c))
 }
@@ -147,6 +176,27 @@ type TurnEnded struct{ Creature ID }
 
 type CombatEnded struct{ Winner Team }
 
+type Dashed struct {
+	Creature ID
+	ExtraFt  int
+}
+
+type Disengaged struct {
+	Creature ID
+	Bonus    bool // taken with Nimble Escape rather than the action
+}
+
+// OpportunityAttackMade precedes the attack events of a Reaction attack.
+type OpportunityAttackMade struct{ Attacker, Target ID }
+
+// CreatureLeft: the creature fled or surrendered and is out of the combat.
+type CreatureLeft struct{ Creature ID }
+
+func (Dashed) event()                {}
+func (Disengaged) event()            {}
+func (OpportunityAttackMade) event() {}
+func (CreatureLeft) event()          {}
+
 func (InitiativeRolled) event() {}
 func (TurnStarted) event()      {}
 func (Moved) event()            {}
@@ -165,6 +215,10 @@ type CreatureState struct {
 	MaxHP int
 	AC    int
 	Down  bool
+	// Gone: fled or surrendered.
+	Gone bool
+	// ReactionAvailable: the creature has not used its Reaction this round.
+	ReactionAvailable bool
 }
 
 // State is the visible state of the session.
@@ -193,7 +247,13 @@ type AttackOption struct {
 // server so the client only renders them (ADR 0004).
 type LegalActions struct {
 	Creature ID
-	Moves    []MoveOption
-	Attacks  []AttackOption
-	EndTurn  bool
+	// Action-economy options still unspent this turn.
+	Action, BonusAction, Reaction bool
+	MovementLeftFt                int
+	Moves                         []MoveOption
+	Attacks                       []AttackOption
+	Dash, Disengage               bool // standard actions, while the action is unspent
+	NimbleEscape                  bool // Bonus Action, while unspent
+	Leave                         bool
+	EndTurn                       bool
 }

@@ -79,3 +79,11 @@ _Avoid_: command, order, input
 **Legal Actions**:
 The active creature's choices this turn, precomputed by the server: reachable squares with their movement cost, valid targets, areas of effect. The client only renders them.
 _Avoid_: options, moves (for the whole set)
+
+**Initiative**:
+The order of turns in a combat, set once when everyone rolls a Dexterity check and then repeated every round. Ties keep the order the caller listed the creatures, standing in for the GM's (and players') choice.
+_Avoid_: turn order (as the rule name)
+
+**Action Economy**:
+What a creature may spend on its turn: its movement (splittable around anything else), one action, one Bonus Action, and one Reaction that is regained at the start of its own turn.
+_Avoid_: AP, action points
