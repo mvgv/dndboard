@@ -24,14 +24,13 @@ type Brain interface {
 // Config starts a table on a hand-built Board.
 type Config struct {
 	// Rows is the Board as text (see board.Parse).
-	Rows      []string
+	Rows []string
+	// Creatures with PlayerCharacter set are controlled by the Players; every
+	// other creature is played by Brain.
 	Creatures []session.CreatureSpec
-	// PlayerCharacters lists the creatures the Players control; every other
-	// creature is played by Brain.
-	PlayerCharacters []session.ID
-	Seed             uint64
-	Dice             dice.Roller
-	Brain            Brain
+	Seed      uint64
+	Dice      dice.Roller
+	Brain     Brain
 }
 
 // buffer is how many messages a client may fall behind before it is dropped.
@@ -78,12 +77,7 @@ func New(cfg Config) (*Table, error) {
 	}
 	for _, c := range cfg.Creatures {
 		t.dieSides[c.ID] = c.Attack.DiceSides
-	}
-	for _, id := range cfg.PlayerCharacters {
-		if _, ok := s.State().Creatures[id]; !ok {
-			return nil, fmt.Errorf("table: Player Character %q is not in the combat", id)
-		}
-		t.pcs[id] = true
+		t.pcs[c.ID] = c.PlayerCharacter
 	}
 	t.playBrain()
 	return t, nil

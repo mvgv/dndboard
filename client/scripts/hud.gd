@@ -53,7 +53,7 @@ func _ready() -> void:
 	bar.size_flags_vertical = Control.SIZE_SHRINK_END
 	bar.add_theme_constant_override("separation", 8)
 	root.add_child(bar)
-	for pair in [["dash", "Disparada"], ["disengage", "Desengajar"],
+	for pair in [["dash", "Disparada"], ["disengage", "Desengajar"], ["stand", "Levantar"],
 			["nimble_escape", "Fuga Ágil (bônus)"], ["end_turn", "Encerrar turno"]]:
 		var b := Button.new()
 		b.text = pair[1]

@@ -41,11 +41,10 @@ func main() {
 	}
 
 	tb, err := table.New(table.Config{
-		Rows:             arena,
-		Creatures:        creatures(),
-		PlayerCharacters: []session.ID{"fighter-1", "fighter-2"},
-		Seed:             *seed,
-		Brain:            table.Approach{},
+		Rows:      arena,
+		Creatures: creatures(),
+		Seed:      *seed,
+		Brain:     table.Approach{},
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -65,6 +64,7 @@ func creatures() []session.CreatureSpec {
 	for i, p := range []board.Pos{{X: 2, Y: 3}, {X: 2, Y: 4}} {
 		f := srd.Fighter()
 		f.ID, f.Name, f.Pos = session.ID(fmt.Sprintf("fighter-%d", i+1)), fmt.Sprintf("Fighter %d", i+1), p
+		f.PlayerCharacter = true // played from the clients; Dying at 0 Hit Points
 		cs = append(cs, f)
 	}
 	for i, p := range []board.Pos{{X: 11, Y: 1}, {X: 12, Y: 5}, {X: 9, Y: 6}} {

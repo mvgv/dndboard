@@ -27,6 +27,7 @@ var _waiting := false # an intent is out; wait for its update or rejection
 var _legal := {}
 var _moves := {} # Vector2i -> movement cost in feet
 var _targets := {} # Vector2i -> target creature id
+var _allies := {} # Vector2i -> Dying creature id that can be stabilized
 
 
 func _ready() -> void:
@@ -164,8 +165,15 @@ func _set_legal(legal: Dictionary) -> void:
 	_legal = legal
 	_moves.clear()
 	_targets.clear()
+	_allies.clear()
 	var move_squares: Array[Vector2i] = []
 	var target_squares: Array[Vector2i] = []
+	var ally_squares: Array[Vector2i] = []
+	for id: Variant in legal.get("stabilize", []):
+		if _standees.has(str(id)):
+			var sq: Vector2i = _standees[str(id)].square
+			_allies[sq] = str(id)
+			ally_squares.append(sq)
 	for mv: Dictionary in legal.get("moves", []):
 		var sq := Vector2i(int(mv["x"]), int(mv["y"]))
 		_moves[sq] = int(mv["cost_ft"])
@@ -176,7 +184,7 @@ func _set_legal(legal: Dictionary) -> void:
 			var sq: Vector2i = _standees[id].square
 			_targets[sq] = id
 			target_squares.append(sq)
-	_board.show_highlights(move_squares, target_squares)
+	_board.show_highlights(move_squares, target_squares, ally_squares)
 	_hud.set_legal(legal)
 	if legal.is_empty():
 		_hud.set_hint("")
@@ -212,6 +220,33 @@ func _play(e: Dictionary) -> void:
 			_hud.add_log("%s usa Desengajar." % _name(str(e["creature"])))
 		"opportunity_attack":
 			_hud.add_log("%s faz um Ataque de Oportunidade contra %s!" % [_name(str(e["attacker"])), _name(str(e["target"]))])
+		"save_rolled", "check_rolled":
+			await _d20_test(e)
+		"death_save_rolled":
+			var who := _name(str(e["creature"]))
+			if not e.get("hidden", false):
+				await _dice.roll([int(e["d20"])], 20, _spot(str(e["creature"])))
+			_hud.add_log("%s faz um teste de resistência contra a morte: %d sucessos, %d falhas" % [who, int(e.get("successes", 0)), int(e.get("failures", 0))])
+		"death_save_failed":
+			_hud.add_log("%s sofre uma falha contra a morte (%d falhas)." % [_name(str(e["creature"])), int(e.get("failures", 0))])
+		"creature_stabilized":
+			_hud.add_log("%s está estável." % _name(str(e["creature"])))
+		"creature_died":
+			_hud.add_log("%s morre." % _name(str(e["creature"])))
+			var s: Standee = _standees.get(str(e["creature"]))
+			if s:
+				await s.fall()
+		"healing_received":
+			_hud.add_log("%s recupera %d PV (PV %d)." % [_name(str(e["creature"])), int(e["amount"]), int(e["hp_after"])])
+			_dice.float_text("+%d" % int(e["amount"]), _head(str(e["creature"])), Color(0.4, 1.0, 0.5))
+		"stood_up":
+			_hud.add_log("%s se levanta." % _name(str(e["creature"])))
+		"condition_applied":
+			_hud.add_log("%s: %s." % [_name(str(e["creature"])), str(e["condition"])])
+		"condition_removed":
+			_hud.add_log("%s: deixa de estar %s." % [_name(str(e["creature"])), str(e["condition"])])
+		"condition_resisted":
+			_hud.add_log("%s é imune a %s." % [_name(str(e["creature"])), str(e["condition"])])
 		"reaction_prompted":
 			_hud.add_log("%s pode fazer um Ataque de Oportunidade contra %s." % [_name(str(e["creature"])), _name(str(e["target"]))])
 		"reaction_declined":
@@ -242,6 +277,23 @@ func _attack(e: Dictionary) -> void:
 	_dice.float_text(outcome, at, _outcome_color(hit))
 
 
+## A saving throw or ability check: dice for a Player Character, only the
+## outcome for a Hidden roll.
+func _d20_test(e: Dictionary) -> void:
+	var id := str(e["creature"])
+	var kind := "teste de resistência" if e["type"] == "save_rolled" else "teste"
+	var ok := bool(e.get("success", false))
+	var outcome := "sucesso" if ok else "falha"
+	if e.get("hidden", false):
+		_hud.add_log("%s: %s de %s: %s" % [_name(id), kind, str(e.get("ability", "")), outcome])
+	else:
+		await _dice.roll([int(e["d20"])], 20, _spot(id))
+		_hud.add_log("%s: %s de %s: d20 %d + %d = %d contra CD %d: %s" % [
+			_name(id), kind, str(e.get("ability", "")), int(e["d20"]), int(e["modifier"]),
+			int(e["total"]), int(e["dc"]), outcome])
+	_dice.float_text(outcome.capitalize(), _head(id), _outcome_color(ok))
+
+
 func _damage(e: Dictionary) -> void:
 	var id := str(e["target"])
 	var amount := int(e["amount"])
@@ -260,8 +312,10 @@ func _damage(e: Dictionary) -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
 		var sq := _square_under((event as InputEventMouseMotion).position)
-		_board.show_hover(sq if (_moves.has(sq) or _targets.has(sq)) else NO_SQUARE)
-		if _targets.has(sq):
+		_board.show_hover(sq if (_moves.has(sq) or _targets.has(sq) or _allies.has(sq)) else NO_SQUARE)
+		if _allies.has(sq):
+			_hud.set_hint("Estabilizar %s" % _name(_allies[sq]))
+		elif _targets.has(sq):
 			_hud.set_hint("Atacar %s" % _name(_targets[sq]))
 		elif _moves.has(sq):
 			_hud.set_hint("Mover: %d pés" % _moves[sq])
@@ -285,7 +339,9 @@ func _unhandled_input(event: InputEvent) -> void:
 func _click(sq: Vector2i) -> void:
 	if _busy or _legal.is_empty():
 		return
-	if _targets.has(sq):
+	if _allies.has(sq):
+		_send({"intent": "stabilize", "target": _allies[sq]})
+	elif _targets.has(sq):
 		_send({"intent": "attack", "target": _targets[sq]})
 	elif _moves.has(sq):
 		_send({"intent": "move", "to": {"x": sq.x, "y": sq.y}})

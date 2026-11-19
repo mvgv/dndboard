@@ -53,7 +53,16 @@ type Creature struct {
 	MaxHP           int    `json:"max_hp"`
 	AC              int    `json:"ac"`
 	Down            bool   `json:"down"`
-	Gone            bool   `json:"gone"`
+	// Dead: died outright or failed three Death Saving Throws.
+	Dead bool `json:"dead"`
+	// Stable: at 0 Hit Points without making Death Saving Throws.
+	Stable             bool `json:"stable"`
+	DeathSaveSuccesses int  `json:"death_save_successes"`
+	DeathSaveFailures  int  `json:"death_save_failures"`
+	// Conditions, including implied ones, sorted by name.
+	Conditions      []string `json:"conditions"`
+	ExhaustionLevel int      `json:"exhaustion_level"`
+	Gone            bool     `json:"gone"`
 }
 
 // State is the visible state of the combat.
@@ -100,9 +109,12 @@ type Legal struct {
 	Attacks        []Target `json:"attacks"`
 	Dash           bool     `json:"dash"`
 	Disengage      bool     `json:"disengage"`
-	NimbleEscape   bool     `json:"nimble_escape"`
-	Leave          bool     `json:"leave"`
-	EndTurn        bool     `json:"end_turn"`
+	// Stand rights a Prone creature; Stabilize lists Dying creatures within 5 feet.
+	Stand        bool     `json:"stand"`
+	Stabilize    []string `json:"stabilize"`
+	NimbleEscape bool     `json:"nimble_escape"`
+	Leave        bool     `json:"leave"`
+	EndTurn      bool     `json:"end_turn"`
 }
 
 // Event is one session event, flattened. Type names the event; only the fields
@@ -120,19 +132,38 @@ type Event struct {
 	ExtraFt  int     `json:"extra_ft,omitempty"`
 	Weapon   string  `json:"weapon,omitempty"`
 	Hidden   bool    `json:"hidden,omitempty"`
-	// Dice: D20 for attack rolls and Initiative, Rolls for damage dice.
+	// Dice: D20 for D20 Tests and Initiative, Rolls for damage dice. Mode is
+	// "advantage" or "disadvantage" when one applied.
 	D20      *int   `json:"d20,omitempty"`
 	Modifier *int   `json:"modifier,omitempty"`
 	Total    *int   `json:"total,omitempty"`
+	Mode     string `json:"mode,omitempty"`
 	AC       *int   `json:"ac,omitempty"`
 	Hit      *bool  `json:"hit,omitempty"`
 	Critical *bool  `json:"critical,omitempty"`
 	Rolls    []int  `json:"rolls,omitempty"`
 	Sides    *int   `json:"dice_sides,omitempty"` // of each damage die
 	Bonus    *int   `json:"bonus,omitempty"`
-	Amount   *int   `json:"amount,omitempty"`
-	Damage   string `json:"damage_type,omitempty"`
-	HPAfter  *int   `json:"hp_after,omitempty"`
+	// Raw is the damage before Resistance, Vulnerability and Immunity;
+	// Adjustment names the one that applied.
+	Raw        *int   `json:"raw,omitempty"`
+	Amount     *int   `json:"amount,omitempty"`
+	Damage     string `json:"damage_type,omitempty"`
+	Adjustment string `json:"adjustment,omitempty"`
+	HPAfter    *int   `json:"hp_after,omitempty"`
+	// Saving throws and ability checks.
+	Ability  string `json:"ability,omitempty"`
+	DC       *int   `json:"dc,omitempty"`
+	Success  *bool  `json:"success,omitempty"`
+	AutoFail bool   `json:"auto_fail,omitempty"`
+	// Death Saving Throw tallies after the event.
+	Successes int `json:"successes,omitempty"`
+	Failures  int `json:"failures,omitempty"`
+	// Conditions: Level is the Exhaustion level after the change; Source names
+	// the charmer, the source of fear or the grappler.
+	Condition string `json:"condition,omitempty"`
+	Level     int    `json:"level,omitempty"`
+	Source    string `json:"source,omitempty"`
 	// BonusAction: Disengage taken as a Bonus Action (Nimble Escape).
 	BonusAction bool   `json:"bonus_action,omitempty"`
 	Winner      string `json:"winner,omitempty"`
@@ -142,7 +173,7 @@ type Event struct {
 
 // Intent is sent from a client: what a Player asks a Player Character to do.
 // Kind is one of "move" (To), "attack" (Target), "dash", "disengage",
-// "nimble_escape", "leave" or "end_turn".
+// "stand", "stabilize" (Target), "nimble_escape", "leave" or "end_turn".
 type Intent struct {
 	Kind   string  `json:"intent"`
 	Actor  string  `json:"actor"`
@@ -172,6 +203,10 @@ func (in Intent) sessionIntent() (session.Intent, error) {
 		return session.Dash{Actor: a}, nil
 	case "disengage":
 		return session.Disengage{Actor: a}, nil
+	case "stand":
+		return session.Stand{Actor: a}, nil
+	case "stabilize":
+		return session.Stabilize{Actor: a, Target: session.ID(in.Target)}, nil
 	case "nimble_escape":
 		return session.NimbleEscape{Actor: a}, nil
 	case "leave":
@@ -217,19 +252,58 @@ func wireEvents(evs []session.Event, pc func(session.ID) bool, sides func(sessio
 				Weapon: e.Weapon, Hit: new(e.Hit), Critical: new(e.Critical)}
 			if pc(e.Attacker) {
 				w.D20, w.Modifier, w.Total, w.AC = new(e.D20), new(e.Modifier), new(e.Total), new(e.AC)
+				w.Mode = string(e.Mode)
 			} else {
 				w.Hidden = true
 			}
 			out = append(out, w)
 		case session.DamageDealt:
+			// The adjustment is the target's, seen in play; the dice are the roller's.
 			w := Event{Type: "damage_dealt", Target: string(e.Target), Amount: new(e.Amount),
-				Damage: e.Type, HPAfter: new(e.HPAfter)}
+				Damage: e.Type, Adjustment: e.Adjustment, HPAfter: new(e.HPAfter)}
 			if pc(roller) {
-				w.Rolls, w.Sides, w.Bonus = e.Rolls, new(sides(roller)), new(e.Bonus)
+				w.Rolls, w.Sides, w.Bonus, w.Raw = e.Rolls, new(sides(roller)), new(e.Bonus), new(e.Raw)
+			} else {
+				w.Hidden = true
+			}
+			roller = "" // damage without an attack (an Effect) has no roller
+			out = append(out, w)
+		case session.SaveRolled:
+			out = append(out, d20Test("save_rolled", e.Creature, e.Ability, e.D20, e.Modifier, e.Total,
+				e.DC, e.Success, e.AutoFail, e.Mode, pc))
+		case session.CheckRolled:
+			out = append(out, d20Test("check_rolled", e.Creature, e.Ability, e.D20, e.Modifier, e.Total,
+				e.DC, e.Success, e.AutoFail, e.Mode, pc))
+		case session.DeathSaveRolled:
+			w := Event{Type: "death_save_rolled", Creature: string(e.Creature),
+				Successes: e.Successes, Failures: e.Failures}
+			if pc(e.Creature) {
+				w.D20 = new(e.D20)
 			} else {
 				w.Hidden = true
 			}
 			out = append(out, w)
+		case session.DeathSaveFailed:
+			out = append(out, Event{Type: "death_save_failed", Creature: string(e.Creature),
+				Successes: e.Successes, Failures: e.Failures})
+		case session.CreatureStabilized:
+			out = append(out, Event{Type: "creature_stabilized", Creature: string(e.Creature)})
+		case session.CreatureDied:
+			out = append(out, Event{Type: "creature_died", Creature: string(e.Creature)})
+		case session.HealingReceived:
+			out = append(out, Event{Type: "healing_received", Creature: string(e.Creature),
+				Amount: new(e.Amount), HPAfter: new(e.HPAfter)})
+		case session.StoodUp:
+			out = append(out, Event{Type: "stood_up", Creature: string(e.Creature), CostFt: e.CostFt})
+		case session.ConditionApplied:
+			out = append(out, Event{Type: "condition_applied", Creature: string(e.Creature),
+				Condition: string(e.Condition), Source: string(e.Source), Level: e.Level})
+		case session.ConditionRemoved:
+			out = append(out, Event{Type: "condition_removed", Creature: string(e.Creature),
+				Condition: string(e.Condition), Level: e.Level})
+		case session.ConditionResisted:
+			out = append(out, Event{Type: "condition_resisted", Creature: string(e.Creature),
+				Condition: string(e.Condition)})
 		case session.CreatureDowned:
 			out = append(out, Event{Type: "creature_downed", Creature: string(e.Creature)})
 		case session.TurnEnded:
@@ -256,6 +330,19 @@ func wireEvents(evs []session.Event, pc func(session.ID) bool, sides func(sessio
 	return out
 }
 
+// d20Test flattens a saving throw or ability check; a Hidden one keeps only
+// its outcome.
+func d20Test(typ string, who session.ID, ab session.Ability, d20, mod, total, dc int,
+	success, autoFail bool, mode session.RollMode, pc func(session.ID) bool) Event {
+	w := Event{Type: typ, Creature: string(who), Ability: string(ab), Success: new(success), AutoFail: autoFail}
+	if pc(who) {
+		w.D20, w.Modifier, w.Total, w.DC, w.Mode = new(d20), new(mod), new(total), new(dc), string(mode)
+	} else {
+		w.Hidden = true
+	}
+	return w
+}
+
 func wireState(st session.State, pc func(session.ID) bool) *State {
 	w := &State{Round: st.Round, Active: string(st.Active), Over: st.Over, Winner: string(st.Winner)}
 	if p := st.Pending; p != nil {
@@ -265,10 +352,16 @@ func wireState(st session.State, pc func(session.ID) bool) *State {
 	for _, id := range st.Order {
 		c := st.Creatures[id]
 		w.Order = append(w.Order, string(id))
+		conds := make([]string, 0, len(c.Conditions))
+		for _, k := range c.Conditions {
+			conds = append(conds, string(k))
+		}
 		w.Creatures = append(w.Creatures, Creature{
 			ID: string(id), Name: c.Name, Team: string(c.Team), CreatureType: c.Type,
 			PlayerCharacter: pc(id), X: c.Pos.X, Y: c.Pos.Y, HP: c.HP, MaxHP: c.MaxHP,
-			AC: c.AC, Down: c.Down, Gone: c.Gone,
+			AC: c.AC, Down: c.Down, Dead: c.Dead, Stable: c.Stable,
+			DeathSaveSuccesses: c.DeathSaveSuccesses, DeathSaveFailures: c.DeathSaveFailures,
+			Conditions: conds, ExhaustionLevel: c.ExhaustionLevel, Gone: c.Gone,
 		})
 	}
 	return w
@@ -278,9 +371,12 @@ func wireLegal(la session.LegalActions) *Legal {
 	w := &Legal{
 		Creature: string(la.Creature), Action: la.Action, BonusAction: la.BonusAction,
 		Reaction: la.Reaction, MovementLeftFt: la.MovementLeftFt,
-		Moves: []Move{}, Attacks: []Target{},
-		Dash: la.Dash, Disengage: la.Disengage, NimbleEscape: la.NimbleEscape,
+		Moves: []Move{}, Attacks: []Target{}, Stabilize: []string{},
+		Dash: la.Dash, Disengage: la.Disengage, Stand: la.Stand, NimbleEscape: la.NimbleEscape,
 		Leave: la.Leave, EndTurn: la.EndTurn,
+	}
+	for _, id := range la.Stabilize {
+		w.Stabilize = append(w.Stabilize, string(id))
 	}
 	for _, m := range la.Moves {
 		w.Moves = append(w.Moves, Move{X: m.To.X, Y: m.To.Y, CostFt: m.CostFt})

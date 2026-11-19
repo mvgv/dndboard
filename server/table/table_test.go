@@ -2,6 +2,7 @@ package table_test
 
 import (
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/mvgv/dndboard/server/board"
@@ -20,9 +21,12 @@ var hall = []string{
 	"#############",
 }
 
+// fighter is a Player Character: a Player controls it, and it makes Death
+// Saving Throws at 0 Hit Points.
 func fighter(id string, x, y int) session.CreatureSpec {
 	f := srd.Fighter()
 	f.ID, f.Pos = session.ID(id), board.Pos{X: x, Y: y}
+	f.PlayerCharacter = true
 	return f
 }
 
@@ -53,11 +57,10 @@ func (b *fakeBrain) Choose(st session.State, _ session.LegalActions) session.Int
 func duel(t *testing.T, brain table.Brain, rolls ...int) *table.Table {
 	t.Helper()
 	tb, err := table.New(table.Config{
-		Rows:             hall,
-		Creatures:        []session.CreatureSpec{fighter("fighter", 1, 2), goblin("goblin", 5, 2)},
-		PlayerCharacters: []session.ID{"fighter"},
-		Dice:             dice.Fixed(append([]int{20, 1}, rolls...)...),
-		Brain:            brain,
+		Rows:      hall,
+		Creatures: []session.CreatureSpec{fighter("fighter", 1, 2), goblin("goblin", 5, 2)},
+		Dice:      dice.Fixed(append([]int{20, 1}, rolls...)...),
+		Brain:     brain,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -338,11 +341,10 @@ func TestReactionPromptPausesTheTable(t *testing.T) {
 	f.Reactions = session.ReactAsk
 	brain := &fakeBrain{script: []session.Intent{session.Move{Actor: "goblin", To: board.Pos{X: 1, Y: 2}}}}
 	tb, err := table.New(table.Config{
-		Rows:             hall,
-		Creatures:        []session.CreatureSpec{f, goblin("goblin", 4, 2)},
-		PlayerCharacters: []session.ID{"fighter"},
-		Dice:             dice.Fixed(5, 20), // the goblin goes first
-		Brain:            brain,
+		Rows:      hall,
+		Creatures: []session.CreatureSpec{f, goblin("goblin", 4, 2)},
+		Dice:      dice.Fixed(5, 20), // the goblin goes first
+		Brain:     brain,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -362,6 +364,69 @@ func TestReactionPromptPausesTheTable(t *testing.T) {
 	}
 	if brain.calls != 1 {
 		t.Fatalf("brain asked %d times while paused, want 1", brain.calls)
+	}
+}
+
+// A Player Character at 0 Hit Points is Dying: its Death Saving Throw is a
+// Player Character roll everyone sees, and an ally next to it may Stabilize it.
+func TestDyingPlayerCharacterCanBeStabilizedFromTheClient(t *testing.T) {
+	brain := &fakeBrain{script: []session.Intent{
+		session.Move{Actor: "goblin", To: board.Pos{X: 2, Y: 2}},
+		session.Attack{Actor: "goblin", Target: "a"},
+	}}
+	tb, err := table.New(table.Config{
+		Rows:      hall,
+		Creatures: []session.CreatureSpec{fighter("a", 1, 2), fighter("b", 1, 3), goblin("goblin", 3, 2)},
+		// Initiative: a 20, b 19, goblin 1.
+		// Goblin: d20 20 is a Critical Hit, 2d6 6+6 + 2 = 14 drops a (12 HP) to 0.
+		// a's Death Saving Throw: 15, a success.
+		// b's Wisdom (Medicine) check to stabilize: 15.
+		Dice:  dice.Fixed(20, 19, 1, 20, 6, 6, 15, 15),
+		Brain: brain,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, ch, leave := tb.Join()
+	defer leave()
+
+	submit(t, tb, table.Intent{Kind: "end_turn", Actor: "a"})
+	next(t, ch)
+	submit(t, tb, table.Intent{Kind: "end_turn", Actor: "b"})
+	u := next(t, ch)
+
+	ds := events(u, "death_save_rolled")
+	if len(ds) != 1 || ds[0].Creature != "a" || ds[0].Hidden || ds[0].D20 == nil || *ds[0].D20 != 15 || ds[0].Successes != 1 {
+		t.Fatalf("death saves = %+v", ds)
+	}
+	a := creature(t, u.State, "a")
+	if a.HP != 0 || !a.Down || a.Dead || a.DeathSaveSuccesses != 1 || !slices.Contains(a.Conditions, "Unconscious") {
+		t.Fatalf("a = %+v", a)
+	}
+	if u.State.Active != "b" || u.Legal == nil || !slices.Equal(u.Legal.Stabilize, []string{"a"}) {
+		t.Fatalf("active %q, legal %+v", u.State.Active, u.Legal)
+	}
+
+	submit(t, tb, table.Intent{Kind: "stabilize", Actor: "b", Target: "a"})
+	u = next(t, ch)
+	chk := events(u, "check_rolled")
+	if len(chk) != 1 || chk[0].Hidden || *chk[0].D20 != 15 || len(events(u, "creature_stabilized")) != 1 {
+		t.Fatalf("events = %+v", u.Events)
+	}
+	if a := creature(t, u.State, "a"); !a.Stable {
+		t.Fatalf("a = %+v, want Stable", a)
+	}
+}
+
+func TestApproachBrainPrefersAStandingTarget(t *testing.T) {
+	st := session.State{Creatures: map[session.ID]session.CreatureState{
+		"goblin": {Team: "monsters"},
+		"a":      {Team: "party", Down: true},
+		"b":      {Team: "party"},
+	}}
+	la := session.LegalActions{Creature: "goblin", Attacks: []session.AttackOption{{Target: "a"}, {Target: "b"}}}
+	if got := (table.Approach{}).Choose(st, la); got != (session.Attack{Actor: "goblin", Target: "b"}) {
+		t.Fatalf("choice = %+v, want an attack on b, who is still standing", got)
 	}
 }
 

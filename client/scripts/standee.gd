@@ -58,7 +58,22 @@ func apply(c: Dictionary) -> void:
 	var out := bool(c.get("down", false)) or bool(c.get("gone", false))
 	visible = not bool(c.get("gone", false))
 	_figure.rotation.x = -PI / 2.0 if out else 0.0
-	_label.text = "%s\n%d/%d PV" % [_name, int(c["hp"]), int(c["max_hp"])]
+	var lines: Array[String] = [_name, "%d/%d PV" % [int(c["hp"]), int(c["max_hp"])]]
+	if bool(c.get("dead", false)):
+		lines.append("Morto")
+	elif bool(c.get("stable", false)):
+		lines.append("Estável")
+	elif bool(c.get("down", false)):
+		lines.append("Morrendo: %d sucessos, %d falhas" % [int(c.get("death_save_successes", 0)), int(c.get("death_save_failures", 0))])
+	var conditions: Array = c.get("conditions", [])
+	if not conditions.is_empty():
+		var names: Array[String] = []
+		for k: Variant in conditions:
+			names.append(str(k))
+		if int(c.get("exhaustion_level", 0)) > 0:
+			names.append("Exaustão %d" % int(c["exhaustion_level"]))
+		lines.append(", ".join(names))
+	_label.text = "\n".join(lines)
 	_label.modulate = Color(0.6, 0.6, 0.6) if out else Color.WHITE
 
 

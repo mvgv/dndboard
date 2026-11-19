@@ -21,15 +21,14 @@ import (
 func serve(t *testing.T) string {
 	t.Helper()
 	f := srd.Fighter()
-	f.ID, f.Pos = "fighter", board.Pos{X: 1, Y: 1}
+	f.ID, f.Pos, f.PlayerCharacter = "fighter", board.Pos{X: 1, Y: 1}, true
 	g := srd.GoblinWarrior()
 	g.ID, g.Pos = "goblin", board.Pos{X: 5, Y: 1}
 	tb, err := table.New(table.Config{
-		Rows:             []string{"#######", "#.....#", "#######"},
-		Creatures:        []session.CreatureSpec{f, g},
-		PlayerCharacters: []session.ID{"fighter"},
-		Dice:             dice.Fixed(20, 1, 1), // the fighter goes first; the goblin's attack misses
-		Brain:            table.Approach{},
+		Rows:      []string{"#######", "#.....#", "#######"},
+		Creatures: []session.CreatureSpec{f, g},
+		Dice:      dice.Fixed(20, 1, 1), // the fighter goes first; the goblin's attack misses
+		Brain:     table.Approach{},
 	})
 	if err != nil {
 		t.Fatal(err)

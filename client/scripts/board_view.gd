@@ -10,6 +10,7 @@ const WALL_COLOR := Color(0.3, 0.28, 0.3)
 const MOVE_COLOR := Color(0.25, 0.6, 1.0, 0.45)
 const TARGET_COLOR := Color(1.0, 0.25, 0.2, 0.55)
 const HOVER_COLOR := Color(1.0, 1.0, 1.0, 0.35)
+const ALLY_COLOR := Color(0.3, 1.0, 0.45, 0.55)
 
 var width := 0
 var height := 0
@@ -77,16 +78,15 @@ func square_at(ray_origin: Vector3, ray_dir: Vector3) -> Vector2i:
 	return sq
 
 
-## Highlights reachable squares and the squares of valid targets.
-func show_highlights(moves: Array[Vector2i], targets: Array[Vector2i]) -> void:
+## Highlights reachable squares, the squares of valid attack targets, and the
+## squares of allies that can be helped (stabilized).
+func show_highlights(moves: Array[Vector2i], targets: Array[Vector2i], allies: Array[Vector2i] = []) -> void:
 	clear_highlights()
-	var move_mat := _flat(MOVE_COLOR, true)
-	var target_mat := _flat(TARGET_COLOR, true)
 	var mesh := _square_mesh(0.9)
-	for sq in moves:
-		_add_highlight(sq, mesh, move_mat)
-	for sq in targets:
-		_add_highlight(sq, mesh, target_mat)
+	for group: Array in [[moves, MOVE_COLOR], [targets, TARGET_COLOR], [allies, ALLY_COLOR]]:
+		var mat := _flat(group[1], true)
+		for sq: Vector2i in group[0]:
+			_add_highlight(sq, mesh, mat)
 
 
 func clear_highlights() -> void:
