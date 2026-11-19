@@ -20,7 +20,8 @@ type Message struct {
 	Events []Event `json:"events,omitempty"`
 	State  *State  `json:"state,omitempty"`
 	// Legal is the active creature's legal actions, present only while a
-	// Player Character is active and the combat goes on.
+	// Player Character is active, the combat goes on and no Reaction Prompt
+	// is pending.
 	Legal  *Legal `json:"legal,omitempty"`
 	Code   string `json:"code,omitempty"`
 	Reason string `json:"reason,omitempty"`
@@ -63,6 +64,16 @@ type State struct {
 	Creatures []Creature `json:"creatures"`
 	Over      bool       `json:"over"`
 	Winner    string     `json:"winner,omitempty"`
+	// Pending is the Reaction Prompt the game is paused on, if any.
+	Pending *Pending `json:"pending,omitempty"`
+}
+
+// Pending is an unanswered Reaction Prompt: Creature may make an Opportunity
+// Attack against Target, with RemainingS seconds left to answer.
+type Pending struct {
+	Creature   string `json:"creature"`
+	Target     string `json:"target"`
+	RemainingS int    `json:"remaining_s"`
 }
 
 // Move is a reachable square and its movement cost.
@@ -125,6 +136,8 @@ type Event struct {
 	// BonusAction: Disengage taken as a Bonus Action (Nimble Escape).
 	BonusAction bool   `json:"bonus_action,omitempty"`
 	Winner      string `json:"winner,omitempty"`
+	// TimeoutS: seconds a Reaction Prompt waits for its answer.
+	TimeoutS int `json:"timeout_s,omitempty"`
 }
 
 // Intent is sent from a client: what a Player asks a Player Character to do.
@@ -231,6 +244,13 @@ func wireEvents(evs []session.Event, pc func(session.ID) bool, sides func(sessio
 			out = append(out, Event{Type: "opportunity_attack", Attacker: string(e.Attacker), Target: string(e.Target)})
 		case session.CreatureLeft:
 			out = append(out, Event{Type: "creature_left", Creature: string(e.Creature)})
+		case session.ReactionPrompted:
+			out = append(out, Event{Type: "reaction_prompted", Creature: string(e.Creature),
+				Target: string(e.Target), TimeoutS: int(e.Timeout.Seconds())})
+		case session.ReactionDeclined:
+			out = append(out, Event{Type: "reaction_declined", Creature: string(e.Creature)})
+		case session.ReactionTimedOut:
+			out = append(out, Event{Type: "reaction_timed_out", Creature: string(e.Creature)})
 		}
 	}
 	return out
@@ -238,6 +258,10 @@ func wireEvents(evs []session.Event, pc func(session.ID) bool, sides func(sessio
 
 func wireState(st session.State, pc func(session.ID) bool) *State {
 	w := &State{Round: st.Round, Active: string(st.Active), Over: st.Over, Winner: string(st.Winner)}
+	if p := st.Pending; p != nil {
+		w.Pending = &Pending{Creature: string(p.Creature), Target: string(p.Target),
+			RemainingS: int(p.Remaining.Seconds())}
+	}
 	for _, id := range st.Order {
 		c := st.Creatures[id]
 		w.Order = append(w.Order, string(id))

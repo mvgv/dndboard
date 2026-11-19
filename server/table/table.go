@@ -150,12 +150,13 @@ func (t *Table) Submit(in Intent) error {
 	return nil
 }
 
-// playBrain lets the Brain act while a creature it plays is active.
+// playBrain lets the Brain act while a creature it plays is active. It stops
+// on a Reaction Prompt: the game is paused until the prompt is answered.
 func (t *Table) playBrain() []session.Event {
 	var out []session.Event
 	for range maxBrainSteps {
 		st := t.s.State()
-		if st.Over || t.pcs[st.Active] {
+		if st.Over || st.Pending != nil || t.pcs[st.Active] {
 			return out
 		}
 		evs, err := t.s.Submit(t.brain.Choose(st, t.s.LegalActions()))
@@ -170,7 +171,7 @@ func (t *Table) playBrain() []session.Event {
 func (t *Table) message(typ string, evs []session.Event) Message {
 	st := t.s.State()
 	m := Message{Type: typ, Events: wireEvents(evs, t.pc, t.sides), State: wireState(st, t.pc)}
-	if !st.Over && t.pcs[st.Active] {
+	if !st.Over && st.Pending == nil && t.pcs[st.Active] {
 		m.Legal = wireLegal(t.s.LegalActions())
 	}
 	return m

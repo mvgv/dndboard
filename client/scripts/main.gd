@@ -147,7 +147,11 @@ func _apply(m: Dictionary) -> void:
 			_standees[id] = s
 		else:
 			_standees[id].apply(c)
-	if bool(state.get("over", false)):
+	var pending: Dictionary = state.get("pending", {})
+	if not pending.is_empty():
+		# Answering Reaction Prompts from the client comes with #16.
+		_hud.set_turn("Aguardando a reação de %s (%d s)" % [_name(str(pending["creature"])), int(pending["remaining_s"])])
+	elif bool(state.get("over", false)):
 		_hud.set_turn("Combate encerrado: vitória de %s" % _team_name(str(state.get("winner", ""))))
 	else:
 		var who := _name(str(state["active"]))
@@ -208,6 +212,12 @@ func _play(e: Dictionary) -> void:
 			_hud.add_log("%s usa Desengajar." % _name(str(e["creature"])))
 		"opportunity_attack":
 			_hud.add_log("%s faz um Ataque de Oportunidade contra %s!" % [_name(str(e["attacker"])), _name(str(e["target"]))])
+		"reaction_prompted":
+			_hud.add_log("%s pode fazer um Ataque de Oportunidade contra %s." % [_name(str(e["creature"])), _name(str(e["target"]))])
+		"reaction_declined":
+			_hud.add_log("%s não reage." % _name(str(e["creature"])))
+		"reaction_timed_out":
+			_hud.add_log("%s não respondeu a tempo: sem reação." % _name(str(e["creature"])))
 		"combat_ended":
 			_hud.add_log("Fim do combate: vitória de %s." % _team_name(str(e["winner"])))
 

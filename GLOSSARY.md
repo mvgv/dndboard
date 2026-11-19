@@ -92,6 +92,14 @@ _Avoid_: AP, action points
 A roll made behind the screen, as a Dungeon Master would: every Player sees its result (hit or miss, damage taken) but not its dice or modifiers. Every roll not made by a Player Character is a Hidden roll; Player Character rolls are shown to everyone.
 _Avoid_: secret roll, GM roll
 
+**Reaction Prompt**:
+The pause in which the game asks a Player Character's owner whether it uses its Reaction (today: an Opportunity Attack as a hostile creature leaves its reach). The game waits until the owner answers or the Campaign's reaction timeout passes, and a timeout means no reaction.
+_Avoid_: popup, confirmation
+
+**Reaction Rule**:
+A per-creature setting for how a Reaction is decided: always react, never react, or ask (the Reaction Prompt). A creature with no setting reacts always, which is how monsters behave; a Player Character is set to ask unless its owner chose always or never. The setting of a monster is never ask.
+_Avoid_: auto-reaction, preference
+
 ### Content format
 
 **Entry**:

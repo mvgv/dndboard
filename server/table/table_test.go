@@ -33,9 +33,13 @@ func goblin(id string, x, y int) session.CreatureSpec {
 }
 
 // fakeBrain plays the monsters from a script of intents, then ends their turns.
-type fakeBrain struct{ script []session.Intent }
+type fakeBrain struct {
+	script []session.Intent
+	calls  int
+}
 
 func (b *fakeBrain) Choose(st session.State, _ session.LegalActions) session.Intent {
+	b.calls++
 	if len(b.script) == 0 {
 		return session.EndTurn{Actor: st.Active}
 	}
@@ -324,6 +328,40 @@ func TestApproachBrainClosesInAndAttacks(t *testing.T) {
 	}
 	if f := creature(t, u.State, "fighter"); f.HP != 7 || u.State.Active != "fighter" {
 		t.Fatalf("after the goblin's turn: %+v, active %q", f, u.State.Active)
+	}
+}
+
+// A Reaction Prompt pauses the game: the table shows it and waits instead of
+// letting the Brain retry. Answering it from the client is #16.
+func TestReactionPromptPausesTheTable(t *testing.T) {
+	f := fighter("fighter", 5, 2)
+	f.Reactions = session.ReactAsk
+	brain := &fakeBrain{script: []session.Intent{session.Move{Actor: "goblin", To: board.Pos{X: 1, Y: 2}}}}
+	tb, err := table.New(table.Config{
+		Rows:             hall,
+		Creatures:        []session.CreatureSpec{f, goblin("goblin", 4, 2)},
+		PlayerCharacters: []session.ID{"fighter"},
+		Dice:             dice.Fixed(5, 20), // the goblin goes first
+		Brain:            brain,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, _, leave := tb.Join()
+	defer leave()
+
+	p := events(w, "reaction_prompted")
+	if len(p) != 1 || p[0].Creature != "fighter" || p[0].Target != "goblin" || p[0].TimeoutS != 30 {
+		t.Fatalf("prompt events = %+v", p)
+	}
+	if pr := w.State.Pending; pr == nil || pr.Creature != "fighter" || pr.Target != "goblin" || pr.RemainingS != 30 {
+		t.Fatalf("pending = %+v", w.State.Pending)
+	}
+	if w.Legal != nil {
+		t.Fatalf("legal actions while paused: %+v", w.Legal)
+	}
+	if brain.calls != 1 {
+		t.Fatalf("brain asked %d times while paused, want 1", brain.calls)
 	}
 }
 
