@@ -35,8 +35,6 @@ type Weapon struct {
 	ReachFt int
 	// Properties are the weapon's properties, e.g. "finesse" (SRD "Equipment").
 	Properties []string
-	// Ranged: a Ranged weapon rather than a Melee one.
-	Ranged bool
 }
 
 // Attack is a stat block's use of a weapon, with the modifiers already summed
@@ -112,7 +110,6 @@ type (
 		Damage     *rawDamage `json:"damage"`
 		ReachFt    *int       `json:"reach_ft"`
 		Properties []string   `json:"properties"`
-		Ranged     bool       `json:"ranged"`
 	}
 	rawAttack struct {
 		Weapon      *string `json:"weapon"`
@@ -258,7 +255,6 @@ func (v *validator) weapon(i int, r rawWeapon) (Weapon, bool) {
 		Name:   v.str(where, "name", r.Name),
 		Status: v.status(where, r.Status),
 		Source: v.str(where, "source", r.Source),
-		Ranged: r.Ranged,
 	}
 	if w.ID != "" {
 		where = fmt.Sprintf("weapon %q", w.ID)
@@ -317,9 +313,11 @@ func (v *validator) statBlock(i int, r rawStatBlock, weapons map[string]Weapon, 
 			v.errf("%s: off_hand must use a different weapon than attack", where)
 		}
 	}
-	for _, id := range r.Features {
+	for j, id := range r.Features {
 		f, ok := features[id]
 		switch {
+		case slices.Contains(r.Features[:j], id):
+			v.errf("%s: lists feature %q twice", where, id)
 		case !ok:
 			v.errf("%s: references unknown feature %q", where, id)
 		case s.Status == Approved && f.Status != Approved:

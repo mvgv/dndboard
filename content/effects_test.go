@@ -77,6 +77,10 @@ func TestStatBlockReferencesFeatures(t *testing.T) {
 	if _, err := content.Parse([]byte(unknown)); err == nil || !strings.Contains(err.Error(), `unknown feature "frenzy"`) {
 		t.Fatalf("unknown feature ref: err = %v", err)
 	}
+	twice := strings.Replace(d, `"features":["rage"]`, `"features":["rage","rage"]`, 1)
+	if _, err := content.Parse([]byte(twice)); err == nil || !strings.Contains(err.Error(), `lists feature "rage" twice`) {
+		t.Fatalf("duplicate feature ref: err = %v", err)
+	}
 	draft := strings.Replace(d, `"name":"Rage","status":"approved"`, `"name":"Rage","status":"draft"`, 1)
 	if _, err := content.Parse([]byte(draft)); err == nil || !strings.Contains(err.Error(), `references draft feature "rage"`) {
 		t.Fatalf("draft feature ref: err = %v", err)
@@ -152,6 +156,8 @@ func TestParseRejectsInvalidWeaponTraits(t *testing.T) {
 	for in, want := range map[string]string{
 		strings.Replace(weapon, `"Bludgeoning"`, `"Bludgeon"`, 1):                         `unknown damage type "Bludgeon"`,
 		strings.Replace(weapon, `"reach_ft":5`, `"reach_ft":5,"properties":["sharp"]`, 1): `unknown weapon property "sharp"`,
+		// Ranged weapons aren't in the format until the engine resolves ranged attacks.
+		strings.Replace(weapon, `"reach_ft":5`, `"reach_ft":5,"ranged":true`, 1): `unknown field "ranged"`,
 	} {
 		_, err := content.Parse([]byte(doc(in, "")))
 		if err == nil || !strings.Contains(err.Error(), want) {

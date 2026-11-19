@@ -341,6 +341,26 @@ func TestHandCodedSavageAttackerRollsWeaponDiceTwice(t *testing.T) {
 	}
 }
 
+func TestHandCodedSavageAttackerOncePerTurn(t *testing.T) {
+	b := barbarian("barb", 3, 2)
+	r := srd.Rogue()
+	b.Attack, b.OffHand = r.Attack, r.OffHand // Shortsword and Dagger: two Light weapons
+	s := start(t, dice.Fixed(15, 5,
+		15, 1, 1, // Shortsword hits; 1d6 1, Savage Attacker reroll 1
+		15, 1, //    Dagger hits; 1d4 1, no second reroll this turn
+	), b, goblin("goblin", 4, 2))
+	if _, ok := find[session.DamageRerolled](submit(t, s, session.Attack{Actor: "barb", Target: "goblin"})); !ok {
+		t.Fatal("first hit of the turn: no reroll")
+	}
+	evs := submit(t, s, session.OffHandAttack{Actor: "barb", Target: "goblin"})
+	if _, ok := find[session.DamageRerolled](evs); ok {
+		t.Fatalf("second hit in the same turn rerolled: %#v", evs)
+	}
+	if d := damageTo(t, evs, "goblin"); d.Amount != 1 {
+		t.Fatalf("off-hand damage: %+v", d)
+	}
+}
+
 func TestFeatureFlaggedRequiresImplementationNeedsEngineCode(t *testing.T) {
 	b := barbarian("barb", 3, 2)
 	b.Features = append(b.Features, content.Feature{ID: "wild-shape", Name: "Wild Shape", RequiresImplementation: true})

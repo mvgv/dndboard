@@ -58,8 +58,13 @@ type featureState struct {
 
 func newFeature(f content.Feature) (*featureState, error) {
 	fs := &featureState{Feature: f}
-	if f.Activation != nil {
-		fs.usesLeft = f.Activation.Uses
+	if a := f.Activation; a != nil {
+		// useFeature and expireFeatures resolve exactly these words; a new
+		// cost or duration must be taught to them before it can load.
+		if a.Cost != content.BonusAction || a.Lasts != content.UntilEndOfNextTurn {
+			return nil, fmt.Errorf("feature %q: the engine can't resolve activation cost %q lasting %q", f.ID, a.Cost, a.Lasts)
+		}
+		fs.usesLeft = a.Uses
 	}
 	if f.RequiresImplementation {
 		code, ok := handCoded[f.ID]

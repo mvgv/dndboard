@@ -90,6 +90,8 @@ const (
 	// WeaponProperty: the attack's weapon has property Value.
 	WeaponProperty ConditionKind = "weapon_property"
 	// RangedWeapon: whether the attack's weapon is a Ranged weapon equals Flag.
+	// Weapons carry no ranged flag until ranged attacks land, so every weapon
+	// is a Melee one; the condition exists to encode rules text faithfully.
 	RangedWeapon ConditionKind = "ranged_weapon"
 	// AttackAbility: the attack uses ability Value ("str" or "dex").
 	AttackAbility ConditionKind = "attack_ability"
