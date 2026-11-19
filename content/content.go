@@ -57,9 +57,14 @@ type StatBlock struct {
 
 // Compendium holds the approved entries of a validated document.
 type Compendium struct {
+	version    int
 	weapons    map[string]Weapon
 	statBlocks map[string]StatBlock
 }
+
+// Version is the document's version. Every regeneration of a document bumps
+// it, so a Campaign can record which version it was started with.
+func (c *Compendium) Version() int { return c.version }
 
 // Weapon returns the approved weapon with the given ID.
 func (c *Compendium) Weapon(id string) (Weapon, bool) {
@@ -77,6 +82,7 @@ func (c *Compendium) StatBlock(id string) (StatBlock, bool) {
 // missing field is distinguishable from 0.
 type (
 	rawDocument struct {
+		Version    *int           `json:"version"`
 		Weapons    []rawWeapon    `json:"weapons"`
 		StatBlocks []rawStatBlock `json:"stat_blocks"`
 	}
@@ -127,6 +133,7 @@ func Parse(data []byte) (*Compendium, error) {
 	}
 
 	v := &validator{}
+	version := v.num("document", "version", doc.Version, 1)
 	weapons := map[string]Weapon{}
 	for i, rw := range doc.Weapons {
 		w, ok := v.weapon(i, rw)
@@ -155,7 +162,7 @@ func Parse(data []byte) (*Compendium, error) {
 		return nil, fmt.Errorf("content: invalid document:\n  %s", strings.Join(v.problems, "\n  "))
 	}
 
-	c := &Compendium{weapons: map[string]Weapon{}, statBlocks: map[string]StatBlock{}}
+	c := &Compendium{version: version, weapons: map[string]Weapon{}, statBlocks: map[string]StatBlock{}}
 	for id, w := range weapons {
 		if w.Status == Approved {
 			c.weapons[id] = w

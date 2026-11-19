@@ -89,3 +89,11 @@ _Avoid_: record, row, asset
 **Review status**:
 Whether an Entry is `draft` or `approved`. Only approved Entries load into the game; an approved Entry may only reference approved Entries.
 _Avoid_: state, flag, verified
+
+**Review queue**:
+The Forge step where the owner sees each extracted Entry beside its source text, with its warnings, and approves or corrects it. Corrections are recorded next to what was extracted.
+_Avoid_: approval screen, QA, inbox
+
+**Version**:
+A positive integer every content document carries, bumped each time the Forge publishes it, so a Campaign can record which Compendium and Adventure it started with.
+_Avoid_: revision, build number

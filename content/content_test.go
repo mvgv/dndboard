@@ -17,13 +17,16 @@ func block(status, weaponID string) string {
 }
 
 func doc(weapons, blocks string) string {
-	return `{"weapons":[` + weapons + `],"stat_blocks":[` + blocks + `]}`
+	return `{"version":3,"weapons":[` + weapons + `],"stat_blocks":[` + blocks + `]}`
 }
 
 func TestParseValid(t *testing.T) {
 	c, err := content.Parse([]byte(doc(weapon, block("approved", "club"))))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if c.Version() != 3 {
+		t.Fatalf("version = %d, want 3", c.Version())
 	}
 	sb, ok := c.StatBlock("thug")
 	if !ok || sb.Attack.Weapon != "club" || sb.InitiativeMod != 0 {
@@ -51,6 +54,8 @@ func TestParseRejects(t *testing.T) {
 		"duplicate id":          {doc(weapon+","+weapon, ""), `duplicate id "club"`},
 		"out of range":          {strings.Replace(doc(weapon, ""), `"dice_sides":4`, `"dice_sides":0`, 1), "dice_sides"},
 		"not json":              {`{`, "content:"},
+		"missing version":       {strings.Replace(doc(weapon, ""), `"version":3,`, "", 1), `missing required field "version"`},
+		"version zero":          {strings.Replace(doc(weapon, ""), `"version":3`, `"version":0`, 1), `"version" = 0`},
 		"approved on draft ref": {doc(draftWeapon, block("approved", "club")), `approved but references draft weapon "club"`},
 	}
 	for name, tc := range cases {
@@ -82,13 +87,20 @@ func TestOnlyApprovedEntriesLoad(t *testing.T) {
 }
 
 func TestEmbeddedSRDContentLoads(t *testing.T) {
-	c, err := srd.Load()
+	chars, err := srd.Characters()
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range []string{"fighter-1", "goblin-warrior"} {
-		if _, ok := c.StatBlock(id); !ok {
-			t.Errorf("stat block %q missing", id)
+	if _, ok := chars.StatBlock("fighter-1"); !ok {
+		t.Error(`characters: stat block "fighter-1" missing`)
+	}
+	monsters, err := srd.Monsters()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"goblin-warrior", "bandit"} {
+		if _, ok := monsters.StatBlock(id); !ok {
+			t.Errorf("monsters: stat block %q missing", id)
 		}
 	}
 }
