@@ -88,6 +88,14 @@ _Avoid_: turn order (as the rule name)
 What a creature may spend on its turn: its movement (splittable around anything else), one action, one Bonus Action, and one Reaction that is regained at the start of its own turn.
 _Avoid_: AP, action points
 
+**Reaction Prompt**:
+The pause in which the game asks a Player Character's owner whether it uses its Reaction (today: an Opportunity Attack as a hostile creature leaves its reach). The game waits until the owner answers or the Campaign's reaction timeout passes, and a timeout means no reaction.
+_Avoid_: popup, confirmation
+
+**Reaction Rule**:
+A per-character setting that skips the Reaction Prompt: always react, never react, or ask (the default). Monsters always react without prompting.
+_Avoid_: auto-reaction, preference
+
 ### Content format
 
 **Entry**:
