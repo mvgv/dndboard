@@ -89,7 +89,7 @@ What a creature may spend on its turn: its movement (splittable around anything 
 _Avoid_: AP, action points
 
 **Standard Actions**:
-The actions every creature has on its turn: Attack, Dash, Disengage, Dodge, Help, Hide, Ready, Search and Utilize. Each spends the creature's one action.
+The actions every creature has on its turn. Implemented so far: Attack, Dash, Disengage, Dodge, Help, Hide, Ready, Search and Utilize (Magic, Study and Influence come with spells and social play). Each spends the creature's one action.
 _Avoid_: basic actions, combat actions
 
 **Readied action**:
@@ -101,8 +101,16 @@ A clickable thing placed on a Board (a door, chest or lever) that a creature wit
 _Avoid_: prop, interactable, item
 
 **Hidden**:
-The Invisible condition a creature gains by succeeding at the Hide action. It ends when the creature attacks or an enemy finds it with the Search action.
+The Invisible condition a creature gains by succeeding at the Hide action. It ends when the creature attacks or an enemy finds it with the Search action. The engine keeps it as a plain flag until conditions are modeled in general.
 _Avoid_: stealthed, concealed
+
+**Reaction Prompt**:
+The pause in which the game asks a Player Character's owner whether it uses its Reaction (today: an Opportunity Attack as a hostile creature leaves its reach). The game waits until the owner answers or the Campaign's reaction timeout passes, and a timeout means no reaction.
+_Avoid_: popup, confirmation
+
+**Reaction Rule**:
+A per-creature setting for how a Reaction is decided: always react, never react, or ask (the Reaction Prompt). A creature with no setting reacts always, which is how monsters behave; a Player Character is set to ask unless its owner chose always or never. The setting of a monster is never ask.
+_Avoid_: auto-reaction, preference
 
 ### Content format
 

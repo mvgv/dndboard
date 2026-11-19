@@ -8,8 +8,10 @@ import (
 )
 
 // The standard actions beyond Attack, Dash and Disengage (SRD 5.2 "Rules
-// Glossary": Dodge, Help, Hide, Ready, Search, Utilize). Rulings where the text
-// leaves room are listed in docs/adr or the pull request that introduced them:
+// Glossary": Dodge, Help, Hide, Ready, Search, Utilize). Where the text leaves
+// room, this comment records the reading taken:
+//   - Dodge's Dexterity-save Advantage is only a flag (no saves yet), and losing
+//     it to Incapacitated or Speed 0 is not modeled.
 //   - Help (ability check) accepts only the skills the session can roll
 //     (Perception for Search, Stealth for Hide) and reaches allies within 5 feet.
 //   - Hide needs a Heavily Obscured square; Cover is not modeled. Hidden
@@ -63,7 +65,8 @@ func (s *Session) rollCheck(c *creature, skill string) (d20 int, mode RollMode) 
 // consumeHelpAttack spends one Help given to c's team against t, if any.
 func (s *Session) consumeHelpAttack(c, t *creature) bool {
 	for i, h := range s.helpAttacks {
-		if h.target == t.ID && s.creatures[h.helper].Team == c.Team {
+		// "One of your allies": the helper itself does not benefit.
+		if h.target == t.ID && h.helper != c.ID && s.creatures[h.helper].Team == c.Team {
 			s.helpAttacks = slices.Delete(s.helpAttacks, i, i+1)
 			return true
 		}
@@ -199,7 +202,7 @@ func (s *Session) fireReadied(mover *creature, from board.Pos) []Event {
 	var out []Event
 	for _, id := range s.order {
 		r := s.creatures[id]
-		if s.over || mover.out() {
+		if s.over || mover.out() || s.pending != nil {
 			break
 		}
 		if r.ready == nil || r.Team == mover.Team || r.out() || r.reactionUsed {
@@ -226,13 +229,12 @@ func (s *Session) fireReadied(mover *creature, from board.Pos) []Event {
 			}
 			out = append(out, s.resolveAttack(r, mover)...)
 		case RespondMove:
-			cost, ok := s.reachable(r, r.SpeedFt)[resp.To]
-			if !ok {
+			if _, ok := s.reachable(r, r.SpeedFt)[resp.To]; !ok {
 				fizzle("%v is not reachable", resp.To)
 				continue
 			}
-			ev, _ := s.relocate(r, resp.To, cost, false)
-			out = append(out, ev...)
+			m := &pendingMove{mover: r.ID, reaction: true, path: s.pathTo(r, resp.To, r.SpeedFt), startPos: r.Pos}
+			out = append(out, s.runMove(m)...)
 		case RespondUtilize:
 			ev, rej := s.useObject(r, s.objects[resp.Object])
 			if rej != nil {
@@ -357,8 +359,6 @@ func (s *Session) useObject(c *creature, o *object) ([]Event, *Rejection) {
 			return nil, reject(ObjectBlocked, "a creature stands in the doorway of %s", o.ID)
 		}
 		return nil, reject(InvalidTarget, "%s is already open", o.ID)
-	case "pull":
-		o.Open = !o.Open
 	default:
 		o.Open = !o.Open
 	}
