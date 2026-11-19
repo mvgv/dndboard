@@ -66,6 +66,12 @@ give_up() {
   set_labels --remove-label in-progress --add-label needs-human
   gh issue comment "$N" -R "$REPO" --body "$1 Branch \`$BRANCH\`; see \`logs/ticket-$N.log\` on the VPS." >/dev/null
   log "$1 Labeled needs-human."
+  # Forget the conductor's once-per-commit actions for this PR, so that when the
+  # owner removes needs-human the conductor sends its feedback again.
+  local pr
+  pr=$(gh pr list -R "$REPO" --head "$BRANCH" --state open --json number --jq '.[0].number // empty' 2>/dev/null || true)
+  [[ -n $pr ]] && rm -f "$WS"/state/*-pr"$pr"-*
+  rm -f "$(git -C "$WT" rev-parse --git-dir 2>/dev/null)/run-ticket-feedback-rounds" 2>/dev/null || true
   exit 1
 }
 LIMIT_RE="hit your .*limit|usage limit reached"
