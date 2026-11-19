@@ -10,6 +10,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/mvgv/dndboard/content"
 	"github.com/mvgv/dndboard/server/board"
 	"github.com/mvgv/dndboard/server/dice"
 )
@@ -36,6 +37,8 @@ type creature struct {
 	hp           int
 	gone         bool // fled or surrendered: no longer in the combat
 	reactionUsed bool // regained at the start of the creature's own turn
+	dodging      bool // until the start of its own turn
+	features     []*featureState
 }
 
 func (c *creature) down() bool { return c.hp <= 0 }
@@ -43,24 +46,40 @@ func (c *creature) down() bool { return c.hp <= 0 }
 // out reports whether the creature no longer takes part in the combat.
 func (c *creature) out() bool { return c.down() || c.gone }
 
+func (c *creature) feature(id string) *featureState {
+	for _, f := range c.features {
+		if f.ID == id {
+			return f
+		}
+	}
+	return nil
+}
+
+// help is a pending Help action: the next attack roll by an ally of helper
+// against target has Advantage.
+type help struct{ helper, target *creature }
+
 // Session is one combat. It is not safe for concurrent use.
 type Session struct {
-	board     *board.Board
-	dice      dice.Roller
-	creatures map[ID]*creature
-	order     []ID
-	turn      int // index into order
-	round     int
-	movedFt   int
-	dashedFt  int  // extra movement from the Dash action this turn
-	acted     bool // the action is spent
-	bonused   bool // the Bonus Action is spent
-	disengage bool // movement provokes no Opportunity Attacks this turn
-	over      bool
-	winner    Team
-	log       []Event
-	timeout   time.Duration
-	pending   *pendingMove // a move paused on a reaction prompt
+	board       *board.Board
+	dice        dice.Roller
+	creatures   map[ID]*creature
+	order       []ID
+	turn        int // index into order
+	turnSeq     int // counts every turn started, for once-per-turn limits
+	round       int
+	movedFt     int
+	dashedFt    int  // extra movement from the Dash action this turn
+	acted       bool // the action is spent
+	bonused     bool // the Bonus Action is spent
+	disengage   bool // movement provokes no Opportunity Attacks this turn
+	lightAttack bool // took the Attack action with a Light weapon this turn
+	helps       []help
+	over        bool
+	winner      Team
+	log         []Event
+	timeout     time.Duration
+	pending     *pendingMove // a move paused on a reaction prompt
 }
 
 // pendingMove is a move in progress along its path. It pauses when a Player
@@ -104,7 +123,15 @@ func New(cfg Config) (*Session, error) {
 				return nil, fmt.Errorf("session: %q and %q share %v", spec.ID, o.ID, spec.Pos)
 			}
 		}
-		s.creatures[spec.ID] = &creature{CreatureSpec: spec, hp: spec.MaxHP}
+		c := &creature{CreatureSpec: spec, hp: spec.MaxHP}
+		for _, f := range spec.Features {
+			fs, err := newFeature(f)
+			if err != nil {
+				return nil, fmt.Errorf("session: %q: %w", spec.ID, err)
+			}
+			c.features = append(c.features, fs)
+		}
+		s.creatures[spec.ID] = c
 		s.order = append(s.order, spec.ID)
 		teams[spec.Team] = true
 	}
@@ -150,10 +177,18 @@ func (s *Session) active() *creature { return s.creatures[s.order[s.turn]] }
 
 func (s *Session) startTurn(out *[]Event) {
 	c := s.active()
+	s.turnSeq++
 	s.movedFt, s.dashedFt = 0, 0
-	s.acted, s.bonused, s.disengage = false, false, false
-	c.reactionUsed = false
+	s.acted, s.bonused, s.disengage, s.lightAttack = false, false, false, false
+	c.reactionUsed, c.dodging = false, false
+	s.expireHelps(c)
 	*out = append(*out, TurnStarted{Creature: c.ID, Round: s.round})
+}
+
+// expireHelps ends c's pending Help: its benefit "expires at the start of your
+// next turn", which comes even when c is down or gone and the turn is skipped.
+func (s *Session) expireHelps(c *creature) {
+	s.helps = slices.DeleteFunc(s.helps, func(h help) bool { return h.helper == c })
 }
 
 // Log returns every event since the session started.
@@ -171,38 +206,34 @@ func (s *Session) Submit(in Intent) ([]Event, error) {
 	if s.pending != nil {
 		return nil, reject(AwaitingReaction, "waiting for %s to answer a reaction prompt", s.pending.asked)
 	}
-	var out []Event
+	var (
+		out []Event
+		err error
+	)
 	switch in := in.(type) {
 	case Move:
-		ev, err := s.move(in)
-		if err != nil {
-			return nil, err
-		}
-		out = ev
+		out, err = s.move(in)
 	case Attack:
-		ev, err := s.attack(in)
-		if err != nil {
-			return nil, err
-		}
-		out = ev
+		out, err = s.attack(in)
+	case OffHandAttack:
+		out, err = s.offHandAttack(in)
 	case Dash:
-		ev, err := s.takeAction(func(c *creature) []Event {
+		out, err = s.takeAction(func(c *creature) []Event {
 			s.dashedFt += c.SpeedFt
 			return []Event{Dashed{Creature: c.ID, ExtraFt: c.SpeedFt}}
 		})
-		if err != nil {
-			return nil, err
-		}
-		out = ev
 	case Disengage:
-		ev, err := s.takeAction(func(c *creature) []Event {
+		out, err = s.takeAction(func(c *creature) []Event {
 			s.disengage = true
 			return []Event{Disengaged{Creature: c.ID}}
 		})
-		if err != nil {
-			return nil, err
-		}
-		out = ev
+	case Dodge:
+		out, err = s.takeAction(func(c *creature) []Event {
+			c.dodging = true
+			return []Event{Dodged{Creature: c.ID}}
+		})
+	case Help:
+		out, err = s.help(in)
 	case NimbleEscape:
 		c := s.active()
 		switch {
@@ -213,12 +244,17 @@ func (s *Session) Submit(in Intent) ([]Event, error) {
 		}
 		s.bonused, s.disengage = true, true
 		out = []Event{Disengaged{Creature: c.ID, Bonus: true}}
+	case UseFeature:
+		out, err = s.useFeature(in)
 	case Leave:
 		out = s.leave()
 	case EndTurn:
 		out = s.endTurn()
 	default:
 		return nil, fmt.Errorf("session: unknown intent %T", in)
+	}
+	if err != nil {
+		return nil, err
 	}
 	s.log = append(s.log, out...)
 	return out, nil
@@ -240,7 +276,7 @@ func (s *Session) reactors(c *creature, a, b board.Pos) []ID {
 	var ids []ID
 	for _, id := range s.order {
 		o := s.creatures[id]
-		if o.Team == c.Team || o.out() || o.reactionUsed || !inReach(o, a) || inReach(o, b) {
+		if o.Team == c.Team || o.out() || o.reactionUsed || !inReach(o.Attack, o.Pos, a) || inReach(o.Attack, o.Pos, b) {
 			continue
 		}
 		ids = append(ids, id)
@@ -299,7 +335,7 @@ func (s *Session) runMove(m *pendingMove) []Event {
 
 func (s *Session) opportunityAttack(o, mover *creature) []Event {
 	o.reactionUsed = true
-	return append([]Event{OpportunityAttackMade{Attacker: o.ID, Target: mover.ID}}, s.resolveAttack(o, mover)...)
+	return append([]Event{OpportunityAttackMade{Attacker: o.ID, Target: mover.ID}}, s.resolveAttack(o, mover, o.Attack)...)
 }
 
 // moverDowned: the mover stops where it stands, and a downed creature's turn
@@ -398,41 +434,176 @@ func (s *Session) leave() []Event {
 	return append(out, s.endTurn()...)
 }
 
+// hostileTarget checks that id names a hostile creature still in the combat
+// within reachFt of c.
+func (s *Session) hostileTarget(c *creature, id ID, reachFt int, what string) (*creature, error) {
+	t, ok := s.creatures[id]
+	switch {
+	case !ok:
+		return nil, reject(InvalidTarget, "no creature %q", id)
+	case t.Team == c.Team:
+		return nil, reject(InvalidTarget, "%s is not hostile", t.ID)
+	case t.out():
+		return nil, reject(InvalidTarget, "%s is down or gone", t.ID)
+	case board.Distance(c.Pos, t.Pos)*board.SquareFeet > reachFt:
+		return nil, reject(OutOfReach, "%s is %d ft away, beyond %s's %d ft reach",
+			t.ID, board.Distance(c.Pos, t.Pos)*board.SquareFeet, what, reachFt)
+	}
+	return t, nil
+}
+
 func (s *Session) attack(in Attack) ([]Event, error) {
 	c := s.active()
 	if s.acted {
 		return nil, reject(ActionUsed, "%s already took an action this turn", c.ID)
 	}
-	t, ok := s.creatures[in.Target]
-	switch {
-	case !ok:
-		return nil, reject(InvalidTarget, "no creature %q", in.Target)
-	case t.Team == c.Team:
-		return nil, reject(InvalidTarget, "%s is not hostile", t.ID)
-	case t.out():
-		return nil, reject(InvalidTarget, "%s is down or gone", t.ID)
-	case !inReach(c, t.Pos):
-		return nil, reject(OutOfReach, "%s is %d ft away, beyond %s's %d ft reach",
-			t.ID, board.Distance(c.Pos, t.Pos)*board.SquareFeet, c.Attack.Name, c.Attack.ReachFt)
+	t, err := s.hostileTarget(c, in.Target, c.Attack.ReachFt, c.Attack.Name)
+	if err != nil {
+		return nil, err
 	}
 	s.acted = true
-	return s.resolveAttack(c, t), nil
+	s.lightAttack = slices.Contains(c.Attack.Properties, "light")
+	return s.resolveAttack(c, t, c.Attack), nil
 }
 
-// resolveAttack makes one attack of c against t and applies the result.
-func (s *Session) resolveAttack(c, t *creature) []Event {
+// offHandAttack: after the Attack action with a Light weapon, one extra attack
+// with a different Light weapon as a Bonus Action (SRD "Equipment", Light).
+func (s *Session) offHandAttack(in OffHandAttack) ([]Event, error) {
+	c := s.active()
+	switch {
+	case c.OffHand == nil:
+		return nil, reject(NoSuchOption, "%s has no off-hand weapon", c.ID)
+	case !s.lightAttack:
+		return nil, reject(NoSuchOption, "%s hasn't taken the Attack action with a Light weapon this turn", c.ID)
+	case s.bonused:
+		return nil, reject(BonusActionUsed, "%s already took a Bonus Action this turn", c.ID)
+	}
+	t, err := s.hostileTarget(c, in.Target, c.OffHand.ReachFt, c.OffHand.Name)
+	if err != nil {
+		return nil, err
+	}
+	s.bonused = true
+	return s.resolveAttack(c, t, *c.OffHand), nil
+}
+
+// help: "Assist an Attack Roll. You momentarily distract an enemy within 5
+// feet of you, giving Advantage to the next attack roll by one of your allies
+// against that enemy." (SRD "Rules Glossary", Help).
+func (s *Session) help(in Help) ([]Event, error) {
+	c := s.active()
+	if s.acted {
+		return nil, reject(ActionUsed, "%s already took an action this turn", c.ID)
+	}
+	t, err := s.hostileTarget(c, in.Target, board.SquareFeet, "Help")
+	if err != nil {
+		return nil, err
+	}
+	s.acted = true
+	s.helps = append(s.helps, help{helper: c, target: t})
+	return []Event{Helped{Creature: c.ID, Target: t.ID}}, nil
+}
+
+// useFeature activates a feature, or extends an active one with the Bonus
+// Action when its activation allows it.
+func (s *Session) useFeature(in UseFeature) ([]Event, error) {
+	c := s.active()
+	f := c.feature(in.Feature)
+	switch {
+	case f == nil || f.Activation == nil:
+		return nil, reject(NoSuchOption, "%s has no feature %q to use", c.ID, in.Feature)
+	case f.active && !f.extendableBy(content.BonusActionExtension):
+		return nil, reject(NoSuchOption, "%s's %s is already active", c.ID, f.Name)
+	case !f.active && f.usesLeft == 0:
+		return nil, reject(NoUsesLeft, "%s has no uses of %s left", c.ID, f.Name)
+	case s.bonused: // content.BonusAction is the only activation cost
+		return nil, reject(BonusActionUsed, "%s already took a Bonus Action this turn", c.ID)
+	}
+	s.bonused = true
+	if f.active {
+		f.extended = true
+		return []Event{FeatureExtended{Creature: c.ID, Feature: f.ID}}, nil
+	}
+	f.usesLeft--
+	f.active, f.extended, f.since = true, true, s.round
+	return []Event{FeatureActivated{Creature: c.ID, Feature: f.ID, UsesLeft: f.usesLeft}}, nil
+}
+
+// expireFeatures ends c's active features whose duration runs out at the end
+// of its turn. An activation lasts until the end of the holder's next turn
+// unless extended during it, and never beyond MaxRounds: entered in round r,
+// it can last through the holder's turn in round r+MaxRounds-1.
+func (s *Session) expireFeatures(c *creature) []Event {
+	var out []Event
+	for _, f := range c.features {
+		if !f.active {
+			continue
+		}
+		switch a := f.Activation; {
+		case a.MaxRounds > 0 && s.round >= f.since+a.MaxRounds-1:
+			out = append(out, s.endFeature(c, f, EndedMaxDuration))
+		case !f.extended:
+			out = append(out, s.endFeature(c, f, EndedExpired))
+		}
+		f.extended = false
+	}
+	return out
+}
+
+func (s *Session) endFeature(c *creature, f *featureState, reason string) Event {
+	f.active, f.extended = false, false
+	return FeatureEnded{Creature: c.ID, Feature: f.ID, Reason: reason}
+}
+
+// rollMode: Advantage from a pending Help by one of c's allies against t
+// (used up by this roll), Disadvantage when t is Dodging; the two cancel
+// (SRD "Rules Glossary", Advantage).
+func (s *Session) rollMode(c, t *creature) (adv, dis bool) {
+	if i := slices.IndexFunc(s.helps, func(h help) bool {
+		return h.target == t && h.helper != c && h.helper.Team == c.Team
+	}); i >= 0 {
+		adv = true
+		s.helps = slices.Delete(s.helps, i, i+1)
+	}
+	// A dodger loses the benefit when Incapacitated; Speed 0 and seeing the
+	// attacker are not modeled yet.
+	dis = t.dodging && !t.out()
+	return adv && !dis, dis && !adv
+}
+
+// resolveAttack makes one attack of c with a against t and applies the result.
+func (s *Session) resolveAttack(c, t *creature, a MeleeAttack) []Event {
 	// Attack roll: hits if the total equals or exceeds AC; a natural 20 hits
 	// as a Critical Hit, a natural 1 misses (SRD "Playing the Game", Attack Rolls).
-	a := c.Attack
-	d20 := s.dice.Roll(20)
+	adv, dis := s.rollMode(c, t)
+	d20s := []int{s.dice.Roll(20)}
+	d20 := d20s[0]
+	if adv || dis {
+		second := s.dice.Roll(20)
+		d20s = append(d20s, second)
+		if adv {
+			d20 = max(d20, second)
+		} else {
+			d20 = min(d20, second)
+		}
+	}
 	total := d20 + a.ToHit
 	crit := d20 == 20
-	hit := crit || (d20 != 1 && total >= t.AC)
+	hits := crit || (d20 != 1 && total >= t.AC)
 	out := []Event{AttackRolled{
-		Attacker: c.ID, Target: t.ID, Weapon: a.Name, D20: d20, Modifier: a.ToHit,
-		Total: total, AC: t.AC, Hit: hit, Critical: crit,
+		Attacker: c.ID, Target: t.ID, Weapon: a.Name, D20: d20, D20s: d20s, Modifier: a.ToHit,
+		Total: total, AC: t.AC, Hit: hits, Critical: crit, Advantage: adv, Disadvantage: dis,
 	}}
-	if !hit {
+	// An attack roll against an enemy on the holder's turn extends features
+	// such as Rage.
+	if c == s.active() {
+		for _, f := range c.features {
+			if f.active && !f.extended && f.extendableBy(content.AttackRollAgainstEnemy) {
+				f.extended = true
+				out = append(out, FeatureExtended{Creature: c.ID, Feature: f.ID})
+			}
+		}
+	}
+	if !hits {
 		return out
 	}
 
@@ -442,17 +613,56 @@ func (s *Session) resolveAttack(c, t *creature) []Event {
 	if crit {
 		n *= 2
 	}
-	rolls := make([]int, n)
-	sum := a.DamageBonus
-	for i := range rolls {
-		rolls[i] = s.dice.Roll(a.DiceSides)
-		sum += rolls[i]
+	h := &hit{s: s, attacker: c, target: t, attack: a, advantage: adv, disadvantage: dis,
+		critical: crit, rolls: s.rollDice(n, a.DiceSides)}
+	for _, f := range c.features {
+		for _, e := range f.effects {
+			e.onHit(h)
+		}
 	}
-	amount := max(sum, 0)
+	out = append(out, h.events...)
+	return append(out, s.applyDamage(h)...)
+}
+
+// applyDamage totals a hit's damage by type and deals it to the target.
+// Bonuses come first, then Resistance halves each resisted type, rounding
+// down (SRD "Playing the Game", Resistance and Vulnerability).
+func (s *Session) applyDamage(h *hit) []Event {
+	t, a := h.target, h.attack
+	byType := map[string]int{a.DamageType: sum(h.rolls) + a.DamageBonus}
+	types := []string{a.DamageType}
+	for _, x := range h.extras {
+		if _, seen := byType[x.Type]; !seen {
+			types = append(types, x.Type)
+		}
+		byType[x.Type] += sum(x.Rolls) + x.Bonus
+	}
+	amount, resisted := 0, false
+	for _, typ := range types {
+		part := max(byType[typ], 0)
+		in := &incoming{s: s, target: t, damageType: typ}
+		for _, f := range t.features {
+			for _, e := range f.effects {
+				e.onDamageTaken(in)
+			}
+		}
+		if in.resisted {
+			part /= 2
+			resisted = true
+		}
+		amount += part
+	}
 	t.hp = max(t.hp-amount, 0)
-	out = append(out, DamageDealt{Target: t.ID, Rolls: rolls, Bonus: a.DamageBonus, Amount: amount, Type: a.DamageType, HPAfter: t.hp})
+	out := []Event{DamageDealt{Target: t.ID, Rolls: h.rolls, Bonus: a.DamageBonus, Extras: h.extras,
+		Resisted: resisted, Amount: amount, Type: a.DamageType, HPAfter: t.hp}}
 	if t.down() {
 		out = append(out, CreatureDowned{Creature: t.ID})
+		// At 0 Hit Points the creature is Unconscious, so Incapacitated.
+		for _, f := range t.features {
+			if f.active && f.endsOn(content.Incapacitated) {
+				out = append(out, s.endFeature(t, f, EndedIncapacitated))
+			}
+		}
 		out = s.finishIfOver(out)
 	}
 	return out
@@ -473,7 +683,12 @@ func (s *Session) victor() (Team, bool) {
 }
 
 func (s *Session) endTurn() []Event {
-	out := []Event{TurnEnded{Creature: s.active().ID}}
+	c := s.active()
+	var out []Event
+	if !c.out() {
+		out = s.expireFeatures(c)
+	}
+	out = append(out, TurnEnded{Creature: c.ID})
 	for {
 		s.turn++
 		if s.turn == len(s.order) {
@@ -483,14 +698,15 @@ func (s *Session) endTurn() []Event {
 		if !s.active().out() {
 			break
 		}
+		s.expireHelps(s.active()) // its turn is skipped
 	}
 	s.startTurn(&out)
 	return out
 }
 
-// inReach reports whether a creature standing at p is within c's melee reach.
-func inReach(c *creature, p board.Pos) bool {
-	return board.Distance(c.Pos, p)*board.SquareFeet <= c.Attack.ReachFt
+// inReach reports whether a creature standing at from reaches p with a.
+func inReach(a MeleeAttack, from, p board.Pos) bool {
+	return board.Distance(from, p)*board.SquareFeet <= a.ReachFt
 }
 
 // reachable maps each square the creature can end its move in to its cost in
@@ -572,9 +788,16 @@ func (s *Session) State() State {
 	st := State{Round: s.round, Active: s.active().ID, Order: slices.Clone(s.order),
 		Creatures: map[ID]CreatureState{}, Over: s.over, Winner: s.winner}
 	for id, c := range s.creatures {
-		st.Creatures[id] = CreatureState{Name: c.Name, Team: c.Team, Pos: c.Pos,
+		cs := CreatureState{Name: c.Name, Team: c.Team, Pos: c.Pos,
 			HP: c.hp, MaxHP: c.MaxHP, AC: c.AC, Down: c.down(),
-			Gone: c.gone, ReactionAvailable: !c.out() && !c.reactionUsed}
+			Gone: c.gone, ReactionAvailable: !c.out() && !c.reactionUsed,
+			Dodging: c.dodging && !c.out()}
+		for _, f := range c.features {
+			if f.active {
+				cs.ActiveFeatures = append(cs.ActiveFeatures, f.ID)
+			}
+		}
+		st.Creatures[id] = cs
 	}
 	if m := s.pending; m != nil {
 		st.Pending = &PendingReaction{Creature: m.asked, Target: s.active().ID, Remaining: s.timeout - m.waited}
@@ -592,23 +815,41 @@ func (s *Session) LegalActions() LegalActions {
 	la.EndTurn, la.Leave = true, true
 	la.MovementLeftFt = c.SpeedFt + s.dashedFt - s.movedFt
 	la.Action, la.Reaction = !s.acted, !c.reactionUsed
-	la.Dash, la.Disengage = !s.acted, !s.acted
+	la.Dash, la.Disengage, la.Dodge = !s.acted, !s.acted, !s.acted
 	la.NimbleEscape = c.NimbleEscape && !s.bonused
-	la.BonusAction = la.NimbleEscape // the only Bonus Action modeled so far
 	for p, cost := range s.reachable(c) {
 		la.Moves = append(la.Moves, MoveOption{To: p, CostFt: cost})
 	}
 	slices.SortFunc(la.Moves, func(a, b MoveOption) int {
 		return cmp.Or(cmp.Compare(a.CostFt, b.CostFt), cmp.Compare(a.To.Y, b.To.Y), cmp.Compare(a.To.X, b.To.X))
 	})
-	if !s.acted {
-		for _, id := range s.order {
-			t := s.creatures[id]
-			if t.Team != c.Team && !t.out() && inReach(c, t.Pos) {
-				la.Attacks = append(la.Attacks, AttackOption{Target: id, Weapon: c.Attack.Name})
+	for _, id := range s.order {
+		t := s.creatures[id]
+		if t.Team == c.Team || t.out() {
+			continue
+		}
+		if !s.acted && inReach(c.Attack, c.Pos, t.Pos) {
+			la.Attacks = append(la.Attacks, AttackOption{Target: id, Weapon: c.Attack.Name})
+		}
+		if !s.acted && board.Distance(c.Pos, t.Pos)*board.SquareFeet <= board.SquareFeet {
+			la.Help = append(la.Help, id)
+		}
+		if c.OffHand != nil && s.lightAttack && !s.bonused && inReach(*c.OffHand, c.Pos, t.Pos) {
+			la.OffHandAttacks = append(la.OffHandAttacks, AttackOption{Target: id, Weapon: c.OffHand.Name})
+		}
+	}
+	if !s.bonused {
+		for _, f := range c.features {
+			switch {
+			case f.Activation == nil:
+			case f.active && f.extendableBy(content.BonusActionExtension):
+				la.Features = append(la.Features, FeatureOption{Feature: f.ID, Extend: true, UsesLeft: f.usesLeft})
+			case !f.active && f.usesLeft > 0:
+				la.Features = append(la.Features, FeatureOption{Feature: f.ID, UsesLeft: f.usesLeft})
 			}
 		}
 	}
+	la.BonusAction = la.NimbleEscape || len(la.OffHandAttacks) > 0 || len(la.Features) > 0
 	return la
 }
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/mvgv/dndboard/content"
 	"github.com/mvgv/dndboard/server/board"
 )
 
@@ -23,6 +24,10 @@ type MeleeAttack struct {
 	DamageBonus int
 	DamageType  string
 	ReachFt     int
+	// Ability is "str" or "dex", the modifier the attack uses.
+	Ability string
+	// Properties are the weapon's properties, e.g. "finesse" or "light".
+	Properties []string
 }
 
 // ReactionRule says how a creature's Reaction to an Opportunity Attack
@@ -62,6 +67,13 @@ type CreatureSpec struct {
 	NimbleEscape bool
 	// Reactions decides Opportunity Attacks; see ReactionRule.
 	Reactions ReactionRule
+	// OffHand is the extra Bonus Action attack with a second Light weapon,
+	// after taking the Attack action with a Light one (SRD "Equipment", Light).
+	OffHand *MeleeAttack
+	// Features are the creature's approved features from the content format.
+	// The engine interprets their declarative effects and runs hand-written
+	// code for those flagged "requires implementation".
+	Features []content.Feature
 }
 
 // Intent is what a Player (or a monster's tactics) asks the active creature to do.
@@ -94,6 +106,35 @@ type Leave struct{ Actor ID }
 // EndTurn ends the actor's turn.
 type EndTurn struct{ Actor ID }
 
+// Help takes the Help action to assist an attack roll: the next attack roll
+// by one of the actor's allies against Target has Advantage.
+type Help struct {
+	Actor  ID
+	Target ID
+}
+
+// Dodge takes the Dodge action: attack rolls against the actor have
+// Disadvantage until the start of its next turn.
+type Dodge struct{ Actor ID }
+
+// OffHandAttack makes the extra Light-weapon attack as a Bonus Action.
+type OffHandAttack struct {
+	Actor  ID
+	Target ID
+}
+
+// UseFeature activates a feature with an activation (e.g. Rage), or extends
+// it when it is active and can be extended that way.
+type UseFeature struct {
+	Actor   ID
+	Feature string // Feature ID
+}
+
+func (h Help) actor() ID          { return h.Actor }
+func (d Dodge) actor() ID         { return d.Actor }
+func (o OffHandAttack) actor() ID { return o.Actor }
+func (u UseFeature) actor() ID    { return u.Actor }
+
 func (m Move) actor() ID         { return m.Actor }
 func (a Attack) actor() ID       { return a.Actor }
 func (d Dash) actor() ID         { return d.Actor }
@@ -117,6 +158,7 @@ const (
 	// AwaitingReaction: the game is paused until the pending prompt is answered.
 	AwaitingReaction
 	NoPendingReaction
+	NoUsesLeft
 )
 
 func (c Code) String() string {
@@ -141,6 +183,8 @@ func (c Code) String() string {
 		return "AwaitingReaction"
 	case NoPendingReaction:
 		return "NoPendingReaction"
+	case NoUsesLeft:
+		return "NoUsesLeft"
 	}
 	return fmt.Sprintf("Code(%d)", int(c))
 }
@@ -180,22 +224,81 @@ type Moved struct {
 type AttackRolled struct {
 	Attacker, Target ID
 	Weapon           string
-	D20              int
+	D20              int   // the d20 used
+	D20s             []int // every d20 rolled: two with Advantage or Disadvantage
 	Modifier         int
 	Total            int
 	AC               int
 	Hit              bool
 	Critical         bool
+	// Advantage and Disadvantage after cancelling each other out.
+	Advantage, Disadvantage bool
 }
 
+// DamageDealt: Rolls are the weapon's damage dice and Bonus its modifier;
+// Extras come from features. Amount is what the target lost, after
+// Resistance.
 type DamageDealt struct {
-	Target  ID
+	Target   ID
+	Rolls    []int
+	Bonus    int
+	Extras   []ExtraDamage
+	Resisted bool // some of the damage was halved by Resistance
+	Amount   int
+	Type     string
+	HPAfter  int
+}
+
+// ExtraDamage is damage a feature adds to a hit: dice, a flat bonus, or both.
+type ExtraDamage struct {
+	Feature string // Feature ID
 	Rolls   []int
 	Bonus   int
-	Amount  int
 	Type    string
-	HPAfter int
 }
+
+// DamageRerolled: a feature rolled the weapon's damage dice twice; the kept
+// roll is the one in the following DamageDealt.
+type DamageRerolled struct {
+	Attacker      ID
+	Feature       string
+	First, Second []int
+}
+
+type Helped struct{ Creature, Target ID }
+
+type Dodged struct{ Creature ID }
+
+type FeatureActivated struct {
+	Creature ID
+	Feature  string
+	UsesLeft int
+}
+
+type FeatureExtended struct {
+	Creature ID
+	Feature  string
+}
+
+// Why an active feature ended.
+const (
+	EndedExpired       = "expired"      // its duration ran out without an extension
+	EndedMaxDuration   = "max_duration" // it reached its longest duration
+	EndedIncapacitated = "incapacitated"
+)
+
+type FeatureEnded struct {
+	Creature ID
+	Feature  string
+	Reason   string
+}
+
+func (DamageRerolled) event()   {}
+func (Helped) event()           {}
+func (Dodged) event()           {}
+func (FeatureActivated) event() {}
+func (FeatureExtended) event()  {}
+func (FeatureEnded) event()     {}
 
 type CreatureDowned struct{ Creature ID }
 
@@ -263,6 +366,10 @@ type CreatureState struct {
 	Gone bool
 	// ReactionAvailable: the creature has not used its Reaction this round.
 	ReactionAvailable bool
+	// Dodging: attack rolls against the creature have Disadvantage.
+	Dodging bool
+	// ActiveFeatures are the IDs of its features currently active (e.g. Rage).
+	ActiveFeatures []string
 }
 
 // State is the visible state of the session.
@@ -306,6 +413,21 @@ type LegalActions struct {
 	Attacks                       []AttackOption
 	Dash, Disengage               bool // standard actions, while the action is unspent
 	NimbleEscape                  bool // Bonus Action, while unspent
-	Leave                         bool
-	EndTurn                       bool
+	// Help lists the enemies within 5 feet the creature can Help against,
+	// while the action is unspent.
+	Help  []ID
+	Dodge bool // while the action is unspent
+	// OffHandAttacks: Bonus Action attack targets after a Light-weapon attack.
+	OffHandAttacks []AttackOption
+	// Features the creature can activate or extend with its Bonus Action.
+	Features []FeatureOption
+	Leave    bool
+	EndTurn  bool
+}
+
+// FeatureOption is a feature the active creature can use now.
+type FeatureOption struct {
+	Feature  string // Feature ID
+	Extend   bool   // already active: using it extends it
+	UsesLeft int
 }
