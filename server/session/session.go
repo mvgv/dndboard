@@ -740,6 +740,7 @@ func (s *Session) LegalActions() LegalActions {
 		return la
 	}
 	la.EndTurn, la.Leave = true, true
+	la.Disengaged = s.disengage
 	la.MovementLeftFt = s.movementLeft(c)
 	// Incapacitated: no action, Bonus Action or Reaction (SRD "Rules Glossary").
 	can := !c.incapacitated()

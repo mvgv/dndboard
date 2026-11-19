@@ -132,6 +132,14 @@ _Avoid_: popup, confirmation
 A per-creature setting for how a Reaction is decided: always react, never react, or ask (the Reaction Prompt). A creature with no setting reacts always, which is how monsters behave; a Player Character is set to ask unless its owner chose always or never. The setting of a monster is never ask.
 _Avoid_: auto-reaction, preference
 
+**Tactical Brain**:
+What picks a monster's Intent on its turn, from the Legal Actions and what everyone can see. The default is deterministic (the same state always gives the same choice): it scores each way of spending the turn by hit chance × expected damage, the chance to drop a character, and the risk of Opportunity Attacks and of enemies that can reach it, weighted by the monster's Personality. Another brain can sit in front of it and the default is the fallback; an intent outside the Legal Actions is never submitted.
+_Avoid_: monster AI, bot
+
+**Personality**:
+The weights that make monsters choose differently from the same numbers: Ferocity (values damage dealt and closing in), Caution (values damage avoided, and retreating once badly hurt) and Loyalty (stays near and defends a leader). Presets are Balanced, Cowardly, Ferocious and Protective.
+_Avoid_: behavior, alignment, temperament
+
 ### Content format
 
 **Entry**:
