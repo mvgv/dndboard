@@ -42,7 +42,72 @@ type CreatureSpec struct {
 	// NimbleEscape lets the creature take Disengage as a Bonus Action (SRD
 	// "Monsters", Nimble Escape; Hide is not modeled yet).
 	NimbleEscape bool
+	// Character marks a Player Character: at 0 Hit Points it falls Unconscious
+	// and makes Death Saving Throws instead of dying outright (SRD "Playing the
+	// Game", Dropping to 0 Hit Points). Monsters die the instant they drop to 0.
+	Character bool
+	// Resistances, Vulnerabilities and Immunities name damage types (SRD
+	// "Playing the Game", Resistance and Vulnerability).
+	Resistances, Vulnerabilities, Immunities []string
+	// ConditionImmunities lists conditions the creature cannot gain.
+	ConditionImmunities []Condition
+	// Conditions the creature starts the combat with (no source).
+	Conditions []Condition
+	// SaveMods and CheckMods are the total modifiers to saving throws and ability
+	// checks per ability; a missing ability means +0.
+	SaveMods, CheckMods map[Ability]int
+	// MedicineMod is the Wisdom (Medicine) check modifier, used to stabilize.
+	MedicineMod int
 }
+
+// Ability is one of the six abilities.
+type Ability string
+
+const (
+	Strength     Ability = "Strength"
+	Dexterity    Ability = "Dexterity"
+	Constitution Ability = "Constitution"
+	Intelligence Ability = "Intelligence"
+	Wisdom       Ability = "Wisdom"
+	Charisma     Ability = "Charisma"
+)
+
+// Condition is one of the 2024 conditions (SRD "Rules Glossary").
+type Condition string
+
+const (
+	CondBlinded       Condition = "Blinded"
+	CondCharmed       Condition = "Charmed"
+	CondDeafened      Condition = "Deafened"
+	CondExhaustion    Condition = "Exhaustion"
+	CondFrightened    Condition = "Frightened"
+	CondGrappled      Condition = "Grappled"
+	CondIncapacitated Condition = "Incapacitated"
+	CondInvisible     Condition = "Invisible"
+	CondParalyzed     Condition = "Paralyzed"
+	CondPetrified     Condition = "Petrified"
+	CondPoisoned      Condition = "Poisoned"
+	CondProne         Condition = "Prone"
+	CondRestrained    Condition = "Restrained"
+	CondStunned       Condition = "Stunned"
+	CondUnconscious   Condition = "Unconscious"
+)
+
+// AllConditions lists every 2024 condition.
+var AllConditions = []Condition{
+	CondBlinded, CondCharmed, CondDeafened, CondExhaustion, CondFrightened,
+	CondGrappled, CondIncapacitated, CondInvisible, CondParalyzed, CondPetrified,
+	CondPoisoned, CondProne, CondRestrained, CondStunned, CondUnconscious,
+}
+
+// RollMode is how a D20 Test was rolled.
+type RollMode string
+
+const (
+	Normal       RollMode = ""
+	Advantage    RollMode = "advantage"
+	Disadvantage RollMode = "disadvantage"
+)
 
 // Intent is what a Player (or a monster's tactics) asks the active creature to do.
 type Intent interface{ actor() ID }
@@ -68,6 +133,13 @@ type Disengage struct{ Actor ID }
 // NimbleEscape takes Disengage as a Bonus Action (creatures with the trait).
 type NimbleEscape struct{ Actor ID }
 
+// Stand rights a Prone actor, spending half its Speed.
+type Stand struct{ Actor ID }
+
+// Stabilize takes the Help action to stabilize a creature at 0 Hit Points: a
+// DC 10 Wisdom (Medicine) check.
+type Stabilize struct{ Actor, Target ID }
+
 // Leave withdraws the actor from the combat (fled or surrendered) and ends its turn.
 type Leave struct{ Actor ID }
 
@@ -79,6 +151,8 @@ func (a Attack) actor() ID       { return a.Actor }
 func (d Dash) actor() ID         { return d.Actor }
 func (d Disengage) actor() ID    { return d.Actor }
 func (n NimbleEscape) actor() ID { return n.Actor }
+func (s Stand) actor() ID        { return s.Actor }
+func (s Stabilize) actor() ID    { return s.Actor }
 func (l Leave) actor() ID        { return l.Actor }
 func (e EndTurn) actor() ID      { return e.Actor }
 
@@ -94,6 +168,7 @@ const (
 	CombatOver
 	BonusActionUsed
 	NoSuchOption
+	Incapacitated
 )
 
 func (c Code) String() string {
@@ -114,6 +189,8 @@ func (c Code) String() string {
 		return "BonusActionUsed"
 	case NoSuchOption:
 		return "NoSuchOption"
+	case Incapacitated:
+		return "Incapacitated"
 	}
 	return fmt.Sprintf("Code(%d)", int(c))
 }
@@ -159,15 +236,20 @@ type AttackRolled struct {
 	AC               int
 	Hit              bool
 	Critical         bool
+	Mode             RollMode
 }
 
 type DamageDealt struct {
-	Target  ID
-	Rolls   []int
-	Bonus   int
-	Amount  int
-	Type    string
-	HPAfter int
+	Target ID
+	Rolls  []int
+	Bonus  int
+	Raw    int // damage before Resistance, Vulnerability and Immunity
+	Amount int // damage taken
+	Type   string
+	// Adjustment is "immunity", "resistance", "vulnerability" or
+	// "resistance+vulnerability" when one applied.
+	Adjustment string
+	HPAfter    int
 }
 
 type CreatureDowned struct{ Creature ID }
@@ -215,6 +297,16 @@ type CreatureState struct {
 	MaxHP int
 	AC    int
 	Down  bool
+	// Dead: died outright or failed three Death Saving Throws.
+	Dead bool
+	// Stable: at 0 Hit Points without making Death Saving Throws.
+	Stable                                bool
+	DeathSaveSuccesses, DeathSaveFailures int
+	// Conditions the creature has, including implied ones (Paralyzed implies
+	// Incapacitated), sorted by name.
+	Conditions []Condition
+	// ExhaustionLevel is 0 without the Exhaustion condition.
+	ExhaustionLevel int
 	// Gone: fled or surrendered.
 	Gone bool
 	// ReactionAvailable: the creature has not used its Reaction this round.
@@ -253,6 +345,8 @@ type LegalActions struct {
 	Moves                         []MoveOption
 	Attacks                       []AttackOption
 	Dash, Disengage               bool // standard actions, while the action is unspent
+	Stand                         bool // right a Prone creature
+	Stabilize                     []ID // creatures at 0 Hit Points within 5 feet
 	NimbleEscape                  bool // Bonus Action, while unspent
 	Leave                         bool
 	EndTurn                       bool
