@@ -1,0 +1,15 @@
+{
+  "enabledPlugins": {
+    "mattpocock-skills@claude-plugins-official": true,
+    "gopls-lsp@claude-plugins-official": true,
+    "context7@claude-plugins-official": true
+  },
+  "permissions": {
+    "deny": [
+      "Read(./client/.godot/**)",
+      "Read(./**/*.pdf)",
+      "Read(./build/**)",
+      "Read(./bin/**)"
+    ]
+  }
+}
