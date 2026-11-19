@@ -69,3 +69,13 @@ _Avoid_: map, battlemap, dungeon
 **Encounter**:
 A challenge the Adventure Book places in a Scene: monsters, a trap, a hazard or an NPC interaction.
 _Avoid_: fight, combat, event
+
+### Rules engine
+
+**Intent**:
+What a Player (or a monster's tactics) asks the active creature to do, such as move to a square or attack a target. The rules engine validates it and either resolves it into events or rejects it with a reason.
+_Avoid_: command, order, input
+
+**Legal Actions**:
+The active creature's choices this turn, precomputed by the server: reachable squares with their movement cost, valid targets, areas of effect. The client only renders them.
+_Avoid_: options, moves (for the whole set)
