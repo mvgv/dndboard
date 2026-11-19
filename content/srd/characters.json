@@ -1,4 +1,5 @@
 {
+  "version": 1,
   "weapons": [
     {
       "id": "longsword",
@@ -6,14 +7,6 @@
       "status": "approved",
       "source": "SRD 5.2 Equipment, Martial Melee Weapons",
       "damage": {"dice_count": 1, "dice_sides": 8, "type": "Slashing"},
-      "reach_ft": 5
-    },
-    {
-      "id": "scimitar",
-      "name": "Scimitar",
-      "status": "approved",
-      "source": "SRD 5.2 Monsters, Goblin Warrior",
-      "damage": {"dice_count": 1, "dice_sides": 6, "type": "Slashing"},
       "reach_ft": 5
     }
   ],
@@ -28,17 +21,6 @@
       "speed_ft": 30,
       "initiative_mod": 1,
       "attack": {"weapon": "longsword", "to_hit": 5, "damage_bonus": 3}
-    },
-    {
-      "id": "goblin-warrior",
-      "name": "Goblin Warrior",
-      "status": "approved",
-      "source": "SRD 5.2 Monsters, Goblin Warrior",
-      "ac": 15,
-      "max_hp": 10,
-      "speed_ft": 30,
-      "initiative_mod": 2,
-      "attack": {"weapon": "scimitar", "to_hit": 4, "damage_bonus": 2}
     }
   ]
 }

@@ -1,0 +1,144 @@
+{
+  "request": {
+    "model": "claude-opus-5-5",
+    "max_tokens": 1024,
+    "system": "You read one monster stat block from the D\u0026D System Reference Document 5.2.1 and record it with the record_stat_block tool.\n\nThe text was extracted from a two-column PDF: lines of a neighbouring stat block can appear inside it, and minus signs can come out garbled. Record only the stat block whose name is given, and copy values exactly as printed; when a value is unreadable, derive it from the rest of the stat block (Initiative is the Dexterity modifier unless the block says otherwise).\n\nattack is the first melee weapon attack under Actions (\"Melee Attack Roll\" or \"Melee or Ranged Attack Roll\"), with its damage dice and flat bonus from the Hit line. Ignore riders such as extra damage \"if the attack roll had Advantage\".\n\nomitted lists, by name, everything in the stat block that these fields don't capture and that affects play: other actions and attacks, damage riders, traits, bonus actions, reactions, other speeds, vulnerabilities, resistances and immunities. Skills, senses, languages, gear and CR don't go in omitted.",
+    "tools": [
+      {
+        "name": "record_stat_block",
+        "description": "Record the fields of one stat block.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "The stat block's name, as printed"
+            },
+            "ac": {
+              "type": "integer",
+              "description": "Armor Class"
+            },
+            "hp": {
+              "type": "integer",
+              "description": "Hit Points (the fixed number, not the dice)"
+            },
+            "speed_ft": {
+              "type": "integer",
+              "description": "Walking Speed in feet"
+            },
+            "initiative_mod": {
+              "type": "integer",
+              "description": "Initiative modifier, e.g. -2 for 'Initiative −2 (8)'"
+            },
+            "attack": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "Attack name, e.g. Scimitar"
+                },
+                "to_hit": {
+                  "type": "integer",
+                  "description": "Attack roll bonus"
+                },
+                "reach_ft": {
+                  "type": "integer"
+                },
+                "dice_count": {
+                  "type": "integer"
+                },
+                "dice_sides": {
+                  "type": "integer"
+                },
+                "damage_bonus": {
+                  "type": "integer",
+                  "description": "Flat bonus added to the damage dice, 0 if none"
+                },
+                "damage_type": {
+                  "type": "string",
+                  "description": "Capitalized, e.g. Slashing"
+                }
+              },
+              "required": [
+                "name",
+                "to_hit",
+                "reach_ft",
+                "dice_count",
+                "dice_sides",
+                "damage_bonus",
+                "damage_type"
+              ],
+              "additionalProperties": false
+            },
+            "omitted": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "name",
+            "ac",
+            "hp",
+            "speed_ft",
+            "initiative_mod",
+            "attack",
+            "omitted"
+          ],
+          "additionalProperties": false
+        }
+      }
+    ],
+    "tool_choice": {
+      "name": "record_stat_block",
+      "type": "tool"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Stat block: Goblin Warrior\n\n\u003csource\u003e\n\u003c!-- page 290 --\u003e\nGoblin Warrior\nSmall Fey (Goblinoid), Chaotic Neutral\nAC 15 Initiative +2 (12)\nHP 10 (3d6)\nSpeed 30 ft.\nMOD SAVE MOD SAVE MOD SAVE\nSTR 8 �1− �1− DEX 15 +2 +2 CON 10 +0 +0\nINT 10 +0 +0 WIS 8 �1− �1− CHA 8 �1− �1−\nSkills Stealth +6\nGear Leather Armor, Scimitar, Shield, Shortbow\nSenses Darkvision 60 ft.; Passive Perception 9\nLanguages Common, Goblin\nCR 1/4 (XP 50; PB +2)\nActions\nScimitar. Melee Attack Roll: +4, reach 5 ft. Hit: 5 (1d6\n+ 2) Slashing damage, plus 2 (1d4) Slashing damage if\nthe attack roll had Advantage.\nShortbow. Ranged Attack Roll: +4, range 80/320 ft.\nHit: 5 (1d6 + 2) Piercing damage, plus 2 (1d4) Piercing\ndamage if the attack roll had Advantage.\nBonus Actions\nNimble Escape. The goblin takes the Disengage or\nHide action.\n290\n\u003c/source\u003e"
+      }
+    ]
+  },
+  "response": {
+    "content": [
+      {
+        "id": "toolu_recorded_goblin-warrior",
+        "input": {
+          "name": "Goblin Warrior",
+          "ac": 15,
+          "hp": 10,
+          "speed_ft": 30,
+          "initiative_mod": 2,
+          "attack": {
+            "name": "Scimitar",
+            "to_hit": 4,
+            "reach_ft": 5,
+            "dice_count": 1,
+            "dice_sides": 6,
+            "damage_bonus": 2,
+            "damage_type": "Slashing"
+          },
+          "omitted": [
+            "Scimitar: extra 2 (1d4) Slashing damage if the attack roll had Advantage",
+            "Shortbow (ranged attack)",
+            "Nimble Escape (bonus action)"
+          ]
+        },
+        "name": "record_stat_block",
+        "type": "tool_use"
+      }
+    ],
+    "id": "msg_recorded_goblin-warrior",
+    "model": "claude-opus-5-5",
+    "role": "assistant",
+    "stop_reason": "tool_use",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "input_tokens": 0,
+      "output_tokens": 0
+    }
+  }
+}

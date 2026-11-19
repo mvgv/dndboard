@@ -1,0 +1,143 @@
+{
+  "request": {
+    "model": "claude-opus-5-5",
+    "max_tokens": 1024,
+    "system": "You read one monster stat block from the D\u0026D System Reference Document 5.2.1 and record it with the record_stat_block tool.\n\nThe text was extracted from a two-column PDF: lines of a neighbouring stat block can appear inside it, and minus signs can come out garbled. Record only the stat block whose name is given, and copy values exactly as printed; when a value is unreadable, derive it from the rest of the stat block (Initiative is the Dexterity modifier unless the block says otherwise).\n\nattack is the first melee weapon attack under Actions (\"Melee Attack Roll\" or \"Melee or Ranged Attack Roll\"), with its damage dice and flat bonus from the Hit line. Ignore riders such as extra damage \"if the attack roll had Advantage\".\n\nomitted lists, by name, everything in the stat block that these fields don't capture and that affects play: other actions and attacks, damage riders, traits, bonus actions, reactions, other speeds, vulnerabilities, resistances and immunities. Skills, senses, languages, gear and CR don't go in omitted.",
+    "tools": [
+      {
+        "name": "record_stat_block",
+        "description": "Record the fields of one stat block.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "The stat block's name, as printed"
+            },
+            "ac": {
+              "type": "integer",
+              "description": "Armor Class"
+            },
+            "hp": {
+              "type": "integer",
+              "description": "Hit Points (the fixed number, not the dice)"
+            },
+            "speed_ft": {
+              "type": "integer",
+              "description": "Walking Speed in feet"
+            },
+            "initiative_mod": {
+              "type": "integer",
+              "description": "Initiative modifier, e.g. -2 for 'Initiative −2 (8)'"
+            },
+            "attack": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "Attack name, e.g. Scimitar"
+                },
+                "to_hit": {
+                  "type": "integer",
+                  "description": "Attack roll bonus"
+                },
+                "reach_ft": {
+                  "type": "integer"
+                },
+                "dice_count": {
+                  "type": "integer"
+                },
+                "dice_sides": {
+                  "type": "integer"
+                },
+                "damage_bonus": {
+                  "type": "integer",
+                  "description": "Flat bonus added to the damage dice, 0 if none"
+                },
+                "damage_type": {
+                  "type": "string",
+                  "description": "Capitalized, e.g. Slashing"
+                }
+              },
+              "required": [
+                "name",
+                "to_hit",
+                "reach_ft",
+                "dice_count",
+                "dice_sides",
+                "damage_bonus",
+                "damage_type"
+              ],
+              "additionalProperties": false
+            },
+            "omitted": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "name",
+            "ac",
+            "hp",
+            "speed_ft",
+            "initiative_mod",
+            "attack",
+            "omitted"
+          ],
+          "additionalProperties": false
+        }
+      }
+    ],
+    "tool_choice": {
+      "name": "record_stat_block",
+      "type": "tool"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Stat block: Zombie\n\n\u003csource\u003e\n\u003c!-- page 343 --\u003e\nZombie\nMedium Undead, Neutral Evil\nAC 8 Initiative )�82(−\nHP 15 (2d8 + 6)\nSpeed 20 ft.\nMOD SAVE MOD SAVE MOD SAVE\nSTR 13 +1 +1 DEX 6 2− 2− CON16 +3 +3\nINT 3 −4 −4 WIS 6 2− +0 CHA 5 3− 3−\nImmunities Poison; Exhaustion, Poisoned\nSenses Darkvision 60 ft.; Passive Perception 8\nLanguages Understands Common plus one other language\nbut can’t speak\nCR 1/4 (XP 50; PB +2)\nTraits\nUndead Fortitude. If damage reduces the zombie to 0\nHit Points, it makes a Constitution saving throw (DC 5\nplus the damage taken) unless the damage is Radiant or\nfrom a Critical Hit. On a successful save, the zombie\ndrops to 1 Hit Point instead.\n\u003c!-- page 344 --\u003e\nActions\nSlam. Melee Attack Roll: +3, reach 5 ft. Hit: 5 (1d8 + 1)\nBludgeoning damage.\n\u003c/source\u003e"
+      }
+    ]
+  },
+  "response": {
+    "content": [
+      {
+        "id": "toolu_recorded_zombie",
+        "input": {
+          "name": "Zombie",
+          "ac": 8,
+          "hp": 15,
+          "speed_ft": 20,
+          "initiative_mod": -2,
+          "attack": {
+            "name": "Slam",
+            "to_hit": 3,
+            "reach_ft": 5,
+            "dice_count": 1,
+            "dice_sides": 8,
+            "damage_bonus": 1,
+            "damage_type": "Bludgeoning"
+          },
+          "omitted": [
+            "Undead Fortitude (trait)",
+            "Immunities: Poison; Exhaustion, Poisoned"
+          ]
+        },
+        "name": "record_stat_block",
+        "type": "tool_use"
+      }
+    ],
+    "id": "msg_recorded_zombie",
+    "model": "claude-opus-5-5",
+    "role": "assistant",
+    "stop_reason": "tool_use",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "input_tokens": 0,
+      "output_tokens": 0
+    }
+  }
+}

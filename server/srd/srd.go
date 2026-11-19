@@ -1,5 +1,6 @@
 // Package srd builds session creatures from the SRD 5.2 content loaded through
-// the content format (content/srd).
+// the content format (content/srd): the hand-written pre-built characters and
+// the Forge-generated monster Compendium.
 package srd
 
 import (
@@ -12,19 +13,33 @@ import (
 )
 
 // Fighter is the level 1 Fighter stat block (id "fighter-1"), on the party team.
-func Fighter() session.CreatureSpec { return mustCreature("fighter-1", "party") }
+func Fighter() session.CreatureSpec { return must(creature(characters, "fighter-1", "party")) }
 
 // GoblinWarrior is the SRD Goblin Warrior stat block, on the monsters team. Its
 // Bonus Action, Nimble Escape (SRD 5.2 "Monsters", Goblin Warrior), is set here
-// because the content format does not carry traits yet.
+// because the content format does not carry traits yet (the Forge lists it as
+// omitted in review).
 func GoblinWarrior() session.CreatureSpec {
-	g := mustCreature("goblin-warrior", "monsters")
+	g := must(Monster("goblin-warrior"))
 	g.NimbleEscape = true // Disengage; Hide is not modeled yet
 	return g
 }
 
+// Monster builds the approved monster stat block with the given ID, on the
+// monsters team. Draft stat blocks are not available.
+func Monster(id string) (session.CreatureSpec, error) { return creature(monsters, id, "monsters") }
+
+var (
+	characters = sync.OnceValues(contentsrd.Characters)
+	monsters   = sync.OnceValues(contentsrd.Monsters)
+)
+
 // creature builds a CreatureSpec from an approved stat block and its weapon.
-func creature(c *content.Compendium, statBlockID string, team session.Team) (session.CreatureSpec, error) {
+func creature(load func() (*content.Compendium, error), statBlockID string, team session.Team) (session.CreatureSpec, error) {
+	c, err := load()
+	if err != nil {
+		return session.CreatureSpec{}, err
+	}
 	sb, ok := c.StatBlock(statBlockID)
 	if !ok {
 		return session.CreatureSpec{}, fmt.Errorf("srd: no approved stat block %q", statBlockID)
@@ -49,16 +64,9 @@ func creature(c *content.Compendium, statBlockID string, team session.Team) (ses
 	}, nil
 }
 
-var compendium = sync.OnceValues(contentsrd.Load)
-
-func mustCreature(id string, team session.Team) session.CreatureSpec {
-	c, err := compendium()
+func must[T any](v T, err error) T {
 	if err != nil {
 		panic(err)
 	}
-	spec, err := creature(c, id, team)
-	if err != nil {
-		panic(err)
-	}
-	return spec
+	return v
 }

@@ -1,0 +1,115 @@
+{
+  "version": 1,
+  "weapons": [
+    {
+      "id": "goblin-warrior-scimitar",
+      "name": "Scimitar",
+      "status": "approved",
+      "source": "SRD 5.2.1, Goblin Warrior, page 290",
+      "damage": {
+        "dice_count": 1,
+        "dice_sides": 6,
+        "type": "Slashing"
+      },
+      "reach_ft": 5
+    },
+    {
+      "id": "bandit-scimitar",
+      "name": "Scimitar",
+      "status": "approved",
+      "source": "SRD 5.2.1, Bandit, page 261",
+      "damage": {
+        "dice_count": 1,
+        "dice_sides": 6,
+        "type": "Slashing"
+      },
+      "reach_ft": 5
+    },
+    {
+      "id": "skeleton-shortsword",
+      "name": "Shortsword",
+      "status": "draft",
+      "source": "SRD 5.2.1, Skeleton, pages 325-326",
+      "damage": {
+        "dice_count": 1,
+        "dice_sides": 6,
+        "type": "Piercing"
+      },
+      "reach_ft": 5
+    },
+    {
+      "id": "zombie-slam",
+      "name": "Slam",
+      "status": "draft",
+      "source": "SRD 5.2.1, Zombie, pages 343-344",
+      "damage": {
+        "dice_count": 1,
+        "dice_sides": 8,
+        "type": "Bludgeoning"
+      },
+      "reach_ft": 5
+    }
+  ],
+  "stat_blocks": [
+    {
+      "id": "goblin-warrior",
+      "name": "Goblin Warrior",
+      "status": "approved",
+      "source": "SRD 5.2.1, Goblin Warrior, page 290",
+      "ac": 15,
+      "max_hp": 10,
+      "speed_ft": 30,
+      "initiative_mod": 2,
+      "attack": {
+        "weapon": "goblin-warrior-scimitar",
+        "to_hit": 4,
+        "damage_bonus": 2
+      }
+    },
+    {
+      "id": "bandit",
+      "name": "Bandit",
+      "status": "approved",
+      "source": "SRD 5.2.1, Bandit, page 261",
+      "ac": 12,
+      "max_hp": 11,
+      "speed_ft": 30,
+      "initiative_mod": 1,
+      "attack": {
+        "weapon": "bandit-scimitar",
+        "to_hit": 3,
+        "damage_bonus": 1
+      }
+    },
+    {
+      "id": "skeleton",
+      "name": "Skeleton",
+      "status": "draft",
+      "source": "SRD 5.2.1, Skeleton, pages 325-326",
+      "ac": 14,
+      "max_hp": 13,
+      "speed_ft": 30,
+      "initiative_mod": 3,
+      "attack": {
+        "weapon": "skeleton-shortsword",
+        "to_hit": 5,
+        "damage_bonus": 3
+      }
+    },
+    {
+      "id": "zombie",
+      "name": "Zombie",
+      "status": "draft",
+      "source": "SRD 5.2.1, Zombie, pages 343-344",
+      "ac": 8,
+      "max_hp": 15,
+      "speed_ft": 20,
+      "initiative_mod": -2,
+      "attack": {
+        "weapon": "zombie-slam",
+        "to_hit": 3,
+        "damage_bonus": 1
+      }
+    }
+  ]
+}
