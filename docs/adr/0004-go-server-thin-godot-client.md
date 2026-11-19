@@ -1,0 +1,3 @@
+# Go authoritative server, thin Godot client
+
+The game server, including the rules engine, is written in Go; the client is Godot 4 with GDScript only and contains no rules logic. Each turn the server sends the active creature's precomputed legal actions (reachable squares and their cost, valid targets, areas of effect), and the client only renders them and returns the chosen intent over WebSocket. We rejected sharing a rules engine between client and server (Rust or C++ as GDExtension, or C# everywhere): it would avoid a round trip, but at the cost of per-platform native builds and losing Godot's web export, and in a turn-based game the round trip doesn't matter. Keeping the client GDScript-only also leaves a browser build possible later.
