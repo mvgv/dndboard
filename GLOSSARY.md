@@ -99,7 +99,7 @@ Whether an Entry is `draft` or `approved`. Only approved Entries load into the g
 _Avoid_: state, flag, verified
 
 **Review queue**:
-The Forge step where the owner sees each extracted Entry beside its source text, with its warnings, and approves or corrects it. Corrections are recorded next to what was extracted.
+The Forge step where the owner sees each extracted Entry beside its source text, with its warnings, and approves or corrects it. Corrections are recorded next to what was extracted. In the Forge's work file an Entry not yet approved is `pending`; it is published as `draft`.
 _Avoid_: approval screen, QA, inbox
 
 **Version**:

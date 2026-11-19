@@ -29,9 +29,6 @@ func GoblinWarrior() session.CreatureSpec {
 // monsters team. Draft stat blocks are not available.
 func Monster(id string) (session.CreatureSpec, error) { return creature(monsters, id, "monsters") }
 
-// MonstersVersion is the version of the monster Compendium in use.
-func MonstersVersion() int { return must(monsters()).Version() }
-
 var (
 	characters = sync.OnceValues(contentsrd.Characters)
 	monsters   = sync.OnceValues(contentsrd.Monsters)

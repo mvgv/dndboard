@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -33,7 +34,11 @@ func TestReviewAndPublishBumpVersion(t *testing.T) {
 	}
 	dir := t.TempDir()
 	work, out := filepath.Join(dir, "work.json"), filepath.Join(dir, "monsters.json")
-	if err := writeWork(work, w); err != nil {
+	data, err := json.MarshalIndent(w, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(work, data, 0o644); err != nil {
 		t.Fatal(err)
 	}
 

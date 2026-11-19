@@ -22,7 +22,7 @@ var srdPDF = flag.String("srd-pdf", "", "path to the SRD 5.2.1 PDF, for TestRead
 
 // srdPages is the text the Forge reads from the SRD 5.2.1 PDF for the pages
 // holding the first slice of stat blocks. TestReadPDF checks it against the
-// PDF itself when FORGE_SRD_PDF is set.
+// PDF itself when run with -srd-pdf.
 func srdPages(t *testing.T) forge.Source {
 	t.Helper()
 	text, err := os.ReadFile("testdata/srd-pages.txt")

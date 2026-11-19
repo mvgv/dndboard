@@ -33,9 +33,6 @@ func find[E session.Event](evs []session.Event) (E, bool) {
 // Scimitar: Melee Attack Roll +3, reach 5 ft., Hit 4 (1d6 + 1) Slashing damage.
 // The Fighter (AC 16, HP 12, Longsword +5, 1d8 + 3) is hand-written.
 func TestFighterBeatsForgedBandit(t *testing.T) {
-	if v := srd.MonstersVersion(); v < 1 {
-		t.Fatalf("monster Compendium version = %d", v)
-	}
 	b, err := board.Parse([]string{"#####", "#...#", "#####"})
 	if err != nil {
 		t.Fatal(err)

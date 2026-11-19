@@ -30,7 +30,7 @@ import (
 	"github.com/mvgv/dndboard/forge"
 )
 
-// DefaultNames is the first slice of SRD stat blocks the Forge processes.
+// defaultNames is the first slice of SRD stat blocks the Forge processes.
 const defaultNames = "Goblin Warrior,Bandit,Skeleton,Zombie"
 
 func main() {
