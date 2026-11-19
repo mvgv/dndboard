@@ -117,6 +117,7 @@ type Event struct {
 	Hit      *bool  `json:"hit,omitempty"`
 	Critical *bool  `json:"critical,omitempty"`
 	Rolls    []int  `json:"rolls,omitempty"`
+	Sides    *int   `json:"dice_sides,omitempty"` // of each damage die
 	Bonus    *int   `json:"bonus,omitempty"`
 	Amount   *int   `json:"amount,omitempty"`
 	Damage   string `json:"damage_type,omitempty"`
@@ -178,8 +179,8 @@ func quote(s string) string {
 
 // wireEvents flattens session events. pc reports whether a creature is a
 // Player Character, whose rolls everyone sees; other creatures' rolls are
-// hidden.
-func wireEvents(evs []session.Event, pc func(session.ID) bool) []Event {
+// hidden. sides gives the damage die of a creature's attack.
+func wireEvents(evs []session.Event, pc func(session.ID) bool, sides func(session.ID) int) []Event {
 	out := make([]Event, 0, len(evs))
 	var roller session.ID // the attacker whose damage follows
 	for _, e := range evs {
@@ -211,7 +212,7 @@ func wireEvents(evs []session.Event, pc func(session.ID) bool) []Event {
 			w := Event{Type: "damage_dealt", Target: string(e.Target), Amount: new(e.Amount),
 				Damage: e.Type, HPAfter: new(e.HPAfter)}
 			if pc(roller) {
-				w.Rolls, w.Bonus = e.Rolls, new(e.Bonus)
+				w.Rolls, w.Sides, w.Bonus = e.Rolls, new(sides(roller)), new(e.Bonus)
 			} else {
 				w.Hidden = true
 			}

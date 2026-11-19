@@ -255,7 +255,7 @@ func TestPlayerCharacterRollsAreShownAndMonsterRollsOnlyTheirResult(t *testing.T
 	if a := atk[0]; a.Hidden || a.D20 == nil || *a.D20 != 15 || *a.Modifier != 5 || *a.Total != 20 || !*a.Hit {
 		t.Fatalf("fighter's attack roll = %+v", a)
 	}
-	if d := dmg[0]; d.Hidden || len(d.Rolls) != 1 || d.Rolls[0] != 5 || *d.Bonus != 3 || *d.Amount != 8 || *d.HPAfter != 2 {
+	if d := dmg[0]; d.Hidden || len(d.Rolls) != 1 || d.Rolls[0] != 5 || *d.Sides != 8 || *d.Bonus != 3 || *d.Amount != 8 || *d.HPAfter != 2 {
 		t.Fatalf("fighter's damage = %+v", d)
 	}
 
@@ -268,7 +268,7 @@ func TestPlayerCharacterRollsAreShownAndMonsterRollsOnlyTheirResult(t *testing.T
 	if a := atk[0]; !a.Hidden || a.D20 != nil || a.Modifier != nil || a.Total != nil || a.Hit == nil || !*a.Hit {
 		t.Fatalf("goblin's attack roll = %+v", a)
 	}
-	if d := dmg[0]; !d.Hidden || d.Rolls != nil || d.Bonus != nil || *d.Amount != 5 || *d.HPAfter != 7 {
+	if d := dmg[0]; !d.Hidden || d.Rolls != nil || d.Sides != nil || d.Bonus != nil || *d.Amount != 5 || *d.HPAfter != 7 {
 		t.Fatalf("goblin's damage = %+v", d)
 	}
 }

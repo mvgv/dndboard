@@ -88,6 +88,10 @@ _Avoid_: turn order (as the rule name)
 What a creature may spend on its turn: its movement (splittable around anything else), one action, one Bonus Action, and one Reaction that is regained at the start of its own turn.
 _Avoid_: AP, action points
 
+**Hidden roll**:
+A roll made behind the screen, as a Dungeon Master would: every Player sees its result (hit or miss, damage taken) but not its dice or modifiers. Every roll not made by a Player Character is a Hidden roll; Player Character rolls are shown to everyone.
+_Avoid_: secret roll, GM roll
+
 ### Content format
 
 **Entry**:

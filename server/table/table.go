@@ -44,12 +44,14 @@ const maxBrainSteps = 1000
 // Table is one combat shared by every connected client. It is safe for
 // concurrent use.
 type Table struct {
-	mu      sync.Mutex
-	s       *session.Session
-	board   Board
-	pcs     map[session.ID]bool
-	brain   Brain
-	clients map[chan Message]struct{}
+	mu    sync.Mutex
+	s     *session.Session
+	board Board
+	pcs   map[session.ID]bool
+	// dieSides is each creature's attack damage die, for the client's dice.
+	dieSides map[session.ID]int
+	brain    Brain
+	clients  map[chan Message]struct{}
 }
 
 // New starts the combat and plays the Brain's creatures until a Player
@@ -67,11 +69,15 @@ func New(cfg Config) (*Table, error) {
 		return nil, err
 	}
 	t := &Table{
-		s:       s,
-		board:   Board{Width: len(cfg.Rows[0]), Height: len(cfg.Rows), Rows: slices.Clone(cfg.Rows)},
-		pcs:     map[session.ID]bool{},
-		brain:   cfg.Brain,
-		clients: map[chan Message]struct{}{},
+		s:        s,
+		board:    Board{Width: len(cfg.Rows[0]), Height: len(cfg.Rows), Rows: slices.Clone(cfg.Rows)},
+		pcs:      map[session.ID]bool{},
+		dieSides: map[session.ID]int{},
+		brain:    cfg.Brain,
+		clients:  map[chan Message]struct{}{},
+	}
+	for _, c := range cfg.Creatures {
+		t.dieSides[c.ID] = c.Attack.DiceSides
 	}
 	for _, id := range cfg.PlayerCharacters {
 		if _, ok := s.State().Creatures[id]; !ok {
@@ -84,6 +90,8 @@ func New(cfg Config) (*Table, error) {
 }
 
 func (t *Table) pc(id session.ID) bool { return t.pcs[id] }
+
+func (t *Table) sides(id session.ID) int { return t.dieSides[id] }
 
 // Join seats a client. It returns the welcome message, the channel of later
 // updates, and leave, which unseats the client and closes the channel. A
@@ -161,7 +169,7 @@ func (t *Table) playBrain() []session.Event {
 
 func (t *Table) message(typ string, evs []session.Event) Message {
 	st := t.s.State()
-	m := Message{Type: typ, Events: wireEvents(evs, t.pc), State: wireState(st, t.pc)}
+	m := Message{Type: typ, Events: wireEvents(evs, t.pc, t.sides), State: wireState(st, t.pc)}
 	if !st.Over && t.pcs[st.Active] {
 		m.Legal = wireLegal(t.s.LegalActions())
 	}
