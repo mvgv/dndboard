@@ -67,7 +67,8 @@ func lookupField(name string) (field, bool) {
 }
 
 // Correct sets one field of the entry, records the correction, and re-checks
-// the entry against its source text and the content format.
+// the entry against its source text and the content format. A corrected
+// entry goes back to pending: it must be approved again as it now stands.
 func (w *Work) Correct(i int, name, value string) error {
 	f, ok := lookupField(name)
 	if !ok {
@@ -83,6 +84,7 @@ func (w *Work) Correct(i int, name, value string) error {
 		return err
 	}
 	e.Corrections = append(e.Corrections, Correction{Field: name, From: from, To: f.get(&e.StatBlock)})
+	e.Review = Pending
 	e.check(w.Source)
 	return nil
 }

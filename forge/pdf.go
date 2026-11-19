@@ -42,14 +42,22 @@ func pageText(p pdf.Page) (text string, err error) {
 			err = fmt.Errorf("unreadable content: %v", r)
 		}
 	}()
-	width := p.V.Key("MediaBox").Index(2).Float64()
+	// MediaBox is inheritable: look it up the page tree when the page lacks one.
+	box := p.V.Key("MediaBox")
+	for n := p.V.Key("Parent"); box.IsNull() && !n.IsNull(); n = n.Key("Parent") {
+		box = n.Key("MediaBox")
+	}
+	width := box.Index(2).Float64() - box.Index(0).Float64()
+	if width <= 0 {
+		return "", fmt.Errorf("no usable MediaBox (width %v)", width)
+	}
 	var cols [2][]pdf.Text
 	for _, g := range p.Content().Text {
 		if strings.TrimSpace(g.S) == "" {
 			continue
 		}
 		i := 0
-		if g.X >= width/2 {
+		if g.X >= box.Index(0).Float64()+width/2 {
 			i = 1
 		}
 		cols[i] = append(cols[i], g)

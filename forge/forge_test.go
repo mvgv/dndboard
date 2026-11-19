@@ -157,6 +157,27 @@ func claudeAnswering(t *testing.T, x forge.Extraction) *forge.Claude {
 	return &forge.Claude{APIKey: "test-key", BaseURL: srv.URL}
 }
 
+// fixedExtractor stands in for Claude at the Extractor seam.
+type fixedExtractor struct{ x forge.Extraction }
+
+func (f fixedExtractor) ExtractStatBlock(context.Context, forge.Excerpt) (forge.Extraction, error) {
+	return f.x, nil
+}
+
+// Duplicates are caught before any extraction is paid for.
+func TestDuplicateNameFailsBeforeExtraction(t *testing.T) {
+	_, err := forge.Extract(context.Background(), srdPages(t), "SRD 5.2.1", []string{"Bandit", "Bandit"}, panicExtractor{})
+	if err == nil || !strings.Contains(err.Error(), "requested twice") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+type panicExtractor struct{}
+
+func (panicExtractor) ExtractStatBlock(context.Context, forge.Excerpt) (forge.Extraction, error) {
+	panic("extractor called")
+}
+
 var bandit = forge.Extraction{Name: "Bandit", AC: 12, HP: 11, SpeedFt: 30, InitiativeMod: 1,
 	Attack: forge.ExtractionAttack{Name: "Scimitar", ToHit: 3, ReachFt: 5, DiceCount: 1, DiceSides: 6, DamageBonus: 1, DamageType: "Slashing"}}
 
@@ -164,7 +185,7 @@ func TestWrongValueIsWarned(t *testing.T) {
 	wrong := bandit
 	wrong.HP = 12
 	wrong.Attack.DamageBonus = 2
-	w, err := forge.Extract(context.Background(), srdPages(t), "SRD 5.2.1", []string{"Bandit"}, claudeAnswering(t, wrong))
+	w, err := forge.Extract(context.Background(), srdPages(t), "SRD 5.2.1", []string{"Bandit"}, fixedExtractor{wrong})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,6 +219,13 @@ func TestInvalidEntryCannotBeApprovedOrPublished(t *testing.T) {
 	}
 	if err := w.Approve(0); err != nil {
 		t.Fatal(err)
+	}
+	// Correcting an approved entry sends it back to review.
+	if err := w.Correct(0, "attack.dice_sides", "0"); err != nil {
+		t.Fatal(err)
+	}
+	if e := w.Entries[0]; e.Review != forge.Pending || len(e.Problems) == 0 {
+		t.Fatalf("after correcting an approved entry: review %q, problems %v", e.Review, e.Problems)
 	}
 }
 
@@ -332,11 +360,17 @@ func TestReadPDF(t *testing.T) {
 		t.Fatal(err)
 	}
 	fixture := srdPages(t)
-	var numbers []int
+	want := map[int]bool{}
 	for _, p := range fixture.Pages {
-		numbers = append(numbers, p.Number)
+		want[p.Number] = true
 	}
-	if got := src.Pick(numbers...).String(); got != fixture.String() {
+	var picked forge.Source
+	for _, p := range src.Pages {
+		if want[p.Number] {
+			picked.Pages = append(picked.Pages, p)
+		}
+	}
+	if got := picked.String(); got != fixture.String() {
 		t.Fatalf("PDF text differs from testdata/srd-pages.txt; regenerate it:\n%s", got)
 	}
 	w, err := forge.Extract(context.Background(), src, "SRD 5.2.1", slice, replayed())

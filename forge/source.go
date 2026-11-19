@@ -49,21 +49,6 @@ func ParseSource(text string) (Source, error) {
 	return s, nil
 }
 
-// Pick returns the pages with the given numbers, in source order.
-func (s Source) Pick(numbers ...int) Source {
-	want := map[int]bool{}
-	for _, n := range numbers {
-		want[n] = true
-	}
-	var out Source
-	for _, p := range s.Pages {
-		if want[p.Number] {
-			out.Pages = append(out.Pages, p)
-		}
-	}
-	return out
-}
-
 // Excerpt is the source text of one stat block, as shown to Claude and to
 // the reviewer.
 type Excerpt struct {

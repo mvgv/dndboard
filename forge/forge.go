@@ -59,28 +59,34 @@ type Correction struct {
 // the result, returning the entries pending review.
 func Extract(ctx context.Context, src Source, sourceName string, names []string, ex Extractor) (*Work, error) {
 	w := &Work{Source: sourceName}
+	// Find every stat block before the first (paid) Claude call, so a
+	// duplicate or missing name fails for free.
 	seen := map[string]bool{}
-	for _, name := range names {
+	excerpts := make([]Excerpt, len(names))
+	for i, name := range names {
+		if seen[slug(name)] {
+			return nil, fmt.Errorf("forge: stat block %q requested twice", name)
+		}
+		seen[slug(name)] = true
 		excerpt, err := src.StatBlock(name)
 		if err != nil {
 			return nil, err
 		}
+		excerpts[i] = excerpt
+	}
+	for i, excerpt := range excerpts {
 		x, err := ex.ExtractStatBlock(ctx, excerpt)
 		if err != nil {
-			return nil, fmt.Errorf("forge: %s: %w", name, err)
+			return nil, fmt.Errorf("forge: %s: %w", names[i], err)
 		}
 		e := Entry{
-			ID:         slug(name),
+			ID:         slug(names[i]),
 			Pages:      excerpt.Pages,
 			SourceText: excerpt.Text,
 			Extracted:  x,
 			StatBlock:  x,
 			Review:     Pending,
 		}
-		if seen[e.ID] {
-			return nil, fmt.Errorf("forge: stat block %q requested twice", name)
-		}
-		seen[e.ID] = true
 		e.check(w.Source)
 		w.Entries = append(w.Entries, e)
 	}
