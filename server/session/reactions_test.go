@@ -195,3 +195,66 @@ func TestLeavingAndReEnteringReachAlongThePathProvokes(t *testing.T) {
 		t.Fatalf("want a 20 ft move, events %+v", ev)
 	}
 }
+
+func TestAnsweredAttackThatDownsTheMoverEndsItsTurn(t *testing.T) {
+	// Goblin (1 HP) is hit by the fighter's reaction: 15+5 vs AC 15, d8 4+3.
+	f := fighter("fighter", 5, 2)
+	f.Reactions = session.ReactAsk
+	g := goblin("g1", 4, 2)
+	g.MaxHP = 1
+	s := start(t, dice.Fixed(5, 20, 15, 4), f, g)
+	submit(t, s, session.Move{Actor: "g1", To: pos(1, 2)})
+	ev, err := s.Answer("fighter", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := find[session.Moved](ev); ok {
+		t.Fatal("a downed creature must not complete its move")
+	}
+	if _, ok := find[session.CombatEnded](ev); !ok {
+		t.Fatalf("want CombatEnded, events %+v", ev)
+	}
+	if got := s.State().Creatures["g1"].Pos; got != pos(4, 2) {
+		t.Fatalf("goblin at %v, want 4,2", got)
+	}
+}
+
+func TestTwoPromptsInSequenceOnTheSameStep(t *testing.T) {
+	f1, f2 := fighter("f1", 5, 2), fighter("f2", 5, 3)
+	f1.Reactions, f2.Reactions = session.ReactAsk, session.ReactAsk
+	// Initiative: f1 5+1, f2 4+1, goblin 20+2. f2's attack misses (d20 2).
+	s := start(t, dice.Fixed(5, 4, 20, 2), f1, f2, goblin("g1", 4, 2))
+	if s.State().Active != "g1" {
+		t.Fatalf("active = %s", s.State().Active)
+	}
+	ev := submit(t, s, session.Move{Actor: "g1", To: pos(1, 1)})
+	if p, _ := find[session.ReactionPrompted](ev); p.Creature != "f1" {
+		t.Fatalf("first prompt = %+v, want f1", p)
+	}
+	ev, err := s.Answer("f1", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, ok := find[session.ReactionPrompted](ev); !ok || p.Creature != "f2" {
+		t.Fatalf("second prompt = %+v, want f2", ev)
+	}
+	if _, ok := find[session.Moved](ev); ok {
+		t.Fatal("still waiting on f2")
+	}
+	ev, err = s.Answer("f2", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := find[session.Moved](ev); !ok {
+		t.Fatalf("move should complete, events %+v", ev)
+	}
+}
+
+func TestPendingRemainingCountsDown(t *testing.T) {
+	s := goblinLeads(t, session.ReactAsk, time.Minute)
+	submit(t, s, session.Move{Actor: "g1", To: pos(1, 2)})
+	s.Advance(20 * time.Second)
+	if p := s.State().Pending; p == nil || p.Remaining != 40*time.Second {
+		t.Fatalf("pending = %+v, want 40s remaining", p)
+	}
+}

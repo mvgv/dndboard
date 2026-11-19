@@ -37,7 +37,8 @@ const (
 	ReactNever
 	// ReactAsk pauses the game and prompts the owner, who has the session's
 	// reaction timeout to answer; no answer means no reaction. It is the
-	// setting for a Player Character without an automatic rule.
+	// setting for a Player Character without an automatic rule. Monsters'
+	// specs must never use it: their reactions are not prompted.
 	ReactAsk
 )
 

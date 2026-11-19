@@ -93,7 +93,7 @@ The pause in which the game asks a Player Character's owner whether it uses its 
 _Avoid_: popup, confirmation
 
 **Reaction Rule**:
-A per-character setting that skips the Reaction Prompt: always react, never react, or ask (the default). Monsters always react without prompting.
+A per-creature setting for how a Reaction is decided: always react, never react, or ask (the Reaction Prompt). A creature with no setting reacts always, which is how monsters behave; a Player Character is set to ask unless its owner chose always or never. The setting of a monster is never ask.
 _Avoid_: auto-reaction, preference
 
 ### Content format

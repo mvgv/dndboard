@@ -252,9 +252,8 @@ func (s *Session) reactors(c *creature, a, b board.Pos) []ID {
 // Attacks (SRD "Playing the Game", Opportunity Attacks): a hostile creature
 // that still has its Reaction may attack right before the mover leaves its
 // reach, unless the mover Disengaged; leaving and re-entering reach along the
-// path provokes again. A Player Character's owner may be prompted, which pauses
-// the move (s.pending) until Answer or Advance resumes it. Submit logs the
-// events it returns; Answer and Advance log their own.
+// path provokes again. A reactor set to ask pauses the move (s.pending).
+// "A creature that you can see" is not modeled yet (sight).
 func (s *Session) runMove(m *pendingMove) []Event {
 	c := s.active()
 	var out []Event
@@ -343,6 +342,8 @@ func (s *Session) Advance(d time.Duration) []Event {
 	return s.resolvePrompt(m, false, true)
 }
 
+// resolvePrompt applies the answer and resumes the move. Submit logs the events
+// it returns, but Answer and Advance bypass Submit, so this logs its own.
 func (s *Session) resolvePrompt(m *pendingMove, react, timedOut bool) []Event {
 	c, o := s.active(), s.creatures[m.asked]
 	s.pending = nil
