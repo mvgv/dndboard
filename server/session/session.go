@@ -8,6 +8,7 @@ import (
 	"container/heap"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/mvgv/dndboard/server/board"
 	"github.com/mvgv/dndboard/server/dice"
@@ -21,7 +22,14 @@ type Config struct {
 	Seed uint64
 	// Dice overrides the seeded roller (scenario tests).
 	Dice dice.Roller
+	// ReactionTimeout is how long a prompted owner has to answer before the
+	// creature does not react; configured per Campaign. Zero means
+	// DefaultReactionTimeout.
+	ReactionTimeout time.Duration
 }
+
+// DefaultReactionTimeout applies when Config.ReactionTimeout is zero.
+const DefaultReactionTimeout = 30 * time.Second
 
 type creature struct {
 	CreatureSpec
@@ -51,6 +59,21 @@ type Session struct {
 	over      bool
 	winner    Team
 	log       []Event
+	timeout   time.Duration
+	pending   *pendingMove // a move paused on a reaction prompt
+}
+
+// pendingMove is a move in progress along its path. It pauses when a Player
+// Character's owner is prompted and resumes with Answer or Advance.
+type pendingMove struct {
+	path     []board.Pos // path[0] is the start square
+	i        int         // the step path[i] -> path[i+1] is being processed
+	checked  bool        // cand holds the reactors for the current step
+	cand     []ID        // creatures still to decide on the current step
+	startPos board.Pos
+	costFt   int
+	asked    ID            // the creature being prompted
+	waited   time.Duration // time spent on the current prompt
 }
 
 // New places the creatures, rolls Initiative and starts the first turn.
@@ -58,7 +81,10 @@ func New(cfg Config) (*Session, error) {
 	if cfg.Board == nil {
 		return nil, fmt.Errorf("session: no board")
 	}
-	s := &Session{board: cfg.Board, dice: cfg.Dice, creatures: map[ID]*creature{}}
+	s := &Session{board: cfg.Board, dice: cfg.Dice, creatures: map[ID]*creature{}, timeout: cfg.ReactionTimeout}
+	if s.timeout <= 0 {
+		s.timeout = DefaultReactionTimeout
+	}
 	if s.dice == nil {
 		s.dice = dice.Seeded(cfg.Seed)
 	}
@@ -142,6 +168,9 @@ func (s *Session) Submit(in Intent) ([]Event, error) {
 	if a := in.actor(); a != s.active().ID {
 		return nil, reject(NotYourTurn, "it is %s's turn, not %s's", s.active().ID, a)
 	}
+	if s.pending != nil {
+		return nil, reject(AwaitingReaction, "waiting for %s to answer a reaction prompt", s.pending.asked)
+	}
 	var out []Event
 	switch in := in.(type) {
 	case Move:
@@ -197,38 +226,145 @@ func (s *Session) Submit(in Intent) ([]Event, error) {
 
 func (s *Session) move(in Move) ([]Event, error) {
 	c := s.active()
-	cost, ok := s.reachable(c)[in.To]
-	if !ok {
+	if _, ok := s.reachable(c)[in.To]; !ok {
 		return nil, reject(Unreachable, "%v is not reachable with %d ft of movement left", in.To, c.SpeedFt+s.dashedFt-s.movedFt)
 	}
-	from := c.Pos
+	m := &pendingMove{path: s.pathTo(c, in.To), startPos: c.Pos}
+	return s.runMove(m), nil
+}
+
+// reactors lists the hostile creatures that may make an Opportunity Attack as
+// the mover steps from a to b: still holding their Reaction, with a in reach
+// and b out of it.
+func (s *Session) reactors(c *creature, a, b board.Pos) []ID {
+	var ids []ID
+	for _, id := range s.order {
+		o := s.creatures[id]
+		if o.Team == c.Team || o.out() || o.reactionUsed || !inReach(o, a) || inReach(o, b) {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// runMove walks the mover along its path one square at a time. Opportunity
+// Attacks (SRD "Playing the Game", Opportunity Attacks): a hostile creature
+// that still has its Reaction may attack right before the mover leaves its
+// reach, unless the mover Disengaged; leaving and re-entering reach along the
+// path provokes again. A reactor set to ask pauses the move (s.pending).
+// "A creature that you can see" is not modeled yet (sight).
+func (s *Session) runMove(m *pendingMove) []Event {
+	c := s.active()
 	var out []Event
-	// Opportunity Attacks (SRD "Playing the Game", Opportunity Attacks): a
-	// hostile creature that still has its Reaction attacks right before the mover
-	// leaves its reach, unless the mover Disengaged. Only the start and end
-	// squares are compared, so passing through a reach is not modeled.
-	if !s.disengage {
-		for _, id := range s.order {
-			o := s.creatures[id]
-			if o.Team == c.Team || o.out() || o.reactionUsed || !inReach(o, from) || inReach(o, in.To) {
-				continue
-			}
-			o.reactionUsed = true
-			out = append(out, OpportunityAttackMade{Attacker: o.ID, Target: c.ID})
-			out = append(out, s.resolveAttack(o, c)...)
-			if c.down() {
-				// The mover never leaves its square, and a downed creature's
-				// turn is over unless the combat ended with it.
-				if !s.over {
-					out = append(out, s.endTurn()...)
-				}
-				return out, nil
+	for m.i < len(m.path)-1 {
+		a, b := m.path[m.i], m.path[m.i+1]
+		if !m.checked {
+			m.checked = true
+			m.cand = nil
+			if !s.disengage {
+				m.cand = s.reactors(c, a, b)
 			}
 		}
+		for len(m.cand) > 0 {
+			o := s.creatures[m.cand[0]]
+			if o.out() || o.reactionUsed {
+				m.cand = m.cand[1:]
+				continue
+			}
+			switch o.Reactions {
+			case ReactNever:
+				m.cand = m.cand[1:]
+			case ReactAsk:
+				m.asked, m.waited = o.ID, 0
+				s.pending = m
+				return append(out, ReactionPrompted{Creature: o.ID, Target: c.ID, Timeout: s.timeout})
+			default:
+				m.cand = m.cand[1:]
+				out = append(out, s.opportunityAttack(o, c)...)
+				if c.down() {
+					return append(out, s.moverDowned(m)...)
+				}
+			}
+		}
+		cost, _ := s.board.EntryCost(b)
+		c.Pos = b
+		m.costFt += cost * board.SquareFeet
+		s.movedFt += cost * board.SquareFeet
+		m.i++
+		m.checked = false
 	}
-	c.Pos = in.To
-	s.movedFt += cost
-	return append(out, Moved{Creature: c.ID, From: from, To: in.To, CostFt: cost}), nil
+	return append(out, Moved{Creature: c.ID, From: m.startPos, To: c.Pos, CostFt: m.costFt})
+}
+
+func (s *Session) opportunityAttack(o, mover *creature) []Event {
+	o.reactionUsed = true
+	return append([]Event{OpportunityAttackMade{Attacker: o.ID, Target: mover.ID}}, s.resolveAttack(o, mover)...)
+}
+
+// moverDowned: the mover stops where it stands, and a downed creature's turn
+// is over unless the combat ended with it.
+func (s *Session) moverDowned(m *pendingMove) []Event {
+	var out []Event
+	if c := s.active(); c.Pos != m.startPos {
+		out = append(out, Moved{Creature: c.ID, From: m.startPos, To: c.Pos, CostFt: m.costFt})
+	}
+	if !s.over {
+		out = append(out, s.endTurn()...)
+	}
+	return out
+}
+
+// Answer is the owner's reply to the pending reaction prompt.
+func (s *Session) Answer(who ID, react bool) ([]Event, error) {
+	m := s.pending
+	if m == nil {
+		return nil, reject(NoPendingReaction, "no reaction prompt is pending")
+	}
+	if who != m.asked {
+		return nil, reject(NoPendingReaction, "the prompt is for %s, not %s", m.asked, who)
+	}
+	return s.resolvePrompt(m, react, false), nil
+}
+
+// Advance tells the session that d of waiting time has passed. When a prompt
+// has been pending for the whole timeout, the creature does not react and the
+// move resumes. Without a pending prompt it does nothing.
+func (s *Session) Advance(d time.Duration) []Event {
+	m := s.pending
+	if m == nil {
+		return nil
+	}
+	m.waited += d
+	if m.waited < s.timeout {
+		return nil
+	}
+	return s.resolvePrompt(m, false, true)
+}
+
+// resolvePrompt applies the answer and resumes the move. Submit logs the events
+// it returns, but Answer and Advance bypass Submit, so this logs its own.
+func (s *Session) resolvePrompt(m *pendingMove, react, timedOut bool) []Event {
+	c, o := s.active(), s.creatures[m.asked]
+	s.pending = nil
+	m.cand = m.cand[1:]
+	var out []Event
+	switch {
+	case react:
+		out = s.opportunityAttack(o, c)
+		if c.down() {
+			out = append(out, s.moverDowned(m)...)
+			s.log = append(s.log, out...)
+			return out
+		}
+	case timedOut:
+		out = []Event{ReactionTimedOut{Creature: o.ID}}
+	default:
+		out = []Event{ReactionDeclined{Creature: o.ID}}
+	}
+	out = append(out, s.runMove(m)...)
+	s.log = append(s.log, out...)
+	return out
 }
 
 // takeAction spends the action on one of the standard actions.
@@ -365,6 +501,25 @@ func inReach(c *creature, p board.Pos) bool {
 // can't be entered ("Playing the Game", Moving around Other Creatures). Passing
 // hostile creatures two sizes apart or Incapacitated is not modeled yet.
 func (s *Session) reachable(c *creature) map[board.Pos]int {
+	cost, _ := s.search(c)
+	return cost
+}
+
+// pathTo returns the cheapest path from the creature's square to a reachable
+// square, both included. Equally cheap paths are not distinguished: the first
+// one found is used.
+func (s *Session) pathTo(c *creature, to board.Pos) []board.Pos {
+	_, prev := s.search(c)
+	path := []board.Pos{to}
+	for p := to; p != c.Pos; {
+		p = prev[p]
+		path = append(path, p)
+	}
+	slices.Reverse(path)
+	return path
+}
+
+func (s *Session) search(c *creature) (map[board.Pos]int, map[board.Pos]board.Pos) {
 	budget := (c.SpeedFt + s.dashedFt - s.movedFt) / board.SquareFeet
 	occupant := map[board.Pos]*creature{}
 	for _, o := range s.creatures {
@@ -373,6 +528,7 @@ func (s *Session) reachable(c *creature) map[board.Pos]int {
 		}
 	}
 	best := map[board.Pos]int{c.Pos: 0}
+	prev := map[board.Pos]board.Pos{}
 	q := &posQueue{{c.Pos, 0}}
 	for q.Len() > 0 {
 		cur := heap.Pop(q).(node)
@@ -397,6 +553,7 @@ func (s *Session) reachable(c *creature) map[board.Pos]int {
 					continue
 				}
 				best[next] = nc
+				prev[next] = cur.pos
 				heap.Push(q, node{next, nc})
 			}
 		}
@@ -407,7 +564,7 @@ func (s *Session) reachable(c *creature) map[board.Pos]int {
 			out[p] = sq * board.SquareFeet
 		}
 	}
-	return out
+	return out, prev
 }
 
 // State returns the visible state.
@@ -419,6 +576,9 @@ func (s *Session) State() State {
 			HP: c.hp, MaxHP: c.MaxHP, AC: c.AC, Down: c.down(),
 			Gone: c.gone, ReactionAvailable: !c.out() && !c.reactionUsed}
 	}
+	if m := s.pending; m != nil {
+		st.Pending = &PendingReaction{Creature: m.asked, Target: s.active().ID, Remaining: s.timeout - m.waited}
+	}
 	return st
 }
 
@@ -426,7 +586,7 @@ func (s *Session) State() State {
 func (s *Session) LegalActions() LegalActions {
 	c := s.active()
 	la := LegalActions{Creature: c.ID}
-	if s.over {
+	if s.over || s.pending != nil {
 		return la
 	}
 	la.EndTurn, la.Leave = true, true
