@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 )
 
@@ -58,7 +59,11 @@ type StatBlock struct {
 	SpeedFt       int
 	InitiativeMod int
 	Attack        Attack
-	Features      []string // Feature IDs
+	// OffHand, when set, is the extra attack with a second Light weapon after
+	// attacking with a Light one (SRD "Equipment", Light). Its damage bonus
+	// leaves out a positive ability modifier.
+	OffHand  *Attack
+	Features []string // Feature IDs
 }
 
 // Compendium holds the approved entries of a validated document.
@@ -125,6 +130,7 @@ type (
 		SpeedFt       *int       `json:"speed_ft"`
 		InitiativeMod *int       `json:"initiative_mod"`
 		Attack        *rawAttack `json:"attack"`
+		OffHand       *rawAttack `json:"off_hand"`
 		Features      []string   `json:"features"`
 	}
 )
@@ -296,23 +302,19 @@ func (v *validator) statBlock(i int, r rawStatBlock, weapons map[string]Weapon, 
 	if r.Attack == nil {
 		v.errf("%s: missing required field %q", where, "attack")
 	} else {
-		s.Attack = Attack{
-			Weapon:      v.str(where, "attack.weapon", r.Attack.Weapon),
-			Ability:     v.str(where, "attack.ability", r.Attack.Ability),
-			ToHit:       v.num(where, "attack.to_hit", r.Attack.ToHit, -100),
-			DamageBonus: v.num(where, "attack.damage_bonus", r.Attack.DamageBonus, -100),
-		}
-		if id := s.Attack.Weapon; id != "" {
-			w, ok := weapons[id]
-			switch {
-			case !ok:
-				v.errf("%s: attack.weapon references unknown id %q", where, id)
-			case s.Status == Approved && w.Status != Approved:
-				v.errf("%s: approved but references %s weapon %q", where, w.Status, id)
-			}
-		}
-		if s.Attack.Ability != "" {
-			oneOf(v, where, "attack ability", s.Attack.Ability, Abilities)
+		s.Attack = v.attack(where, "attack", r.Attack, s.Status, weapons)
+	}
+	if r.OffHand != nil {
+		off := v.attack(where, "off_hand", r.OffHand, s.Status, weapons)
+		s.OffHand = &off
+		main, mainOK := weapons[s.Attack.Weapon]
+		second, secondOK := weapons[off.Weapon]
+		switch {
+		case !mainOK || !secondOK:
+		case !slices.Contains(main.Properties, "light") || !slices.Contains(second.Properties, "light"):
+			v.errf("%s: off_hand needs Light weapons in both hands", where)
+		case main.ID == second.ID:
+			v.errf("%s: off_hand must use a different weapon than attack", where)
 		}
 	}
 	for _, id := range r.Features {
@@ -326,4 +328,26 @@ func (v *validator) statBlock(i int, r rawStatBlock, weapons map[string]Weapon, 
 	}
 	s.Features = r.Features
 	return s, len(v.problems) == before
+}
+
+func (v *validator) attack(where, field string, r *rawAttack, status Status, weapons map[string]Weapon) Attack {
+	a := Attack{
+		Weapon:      v.str(where, field+".weapon", r.Weapon),
+		Ability:     v.str(where, field+".ability", r.Ability),
+		ToHit:       v.num(where, field+".to_hit", r.ToHit, -100),
+		DamageBonus: v.num(where, field+".damage_bonus", r.DamageBonus, -100),
+	}
+	if id := a.Weapon; id != "" {
+		w, ok := weapons[id]
+		switch {
+		case !ok:
+			v.errf("%s: %s.weapon references unknown id %q", where, field, id)
+		case status == Approved && w.Status != Approved:
+			v.errf("%s: approved but references %s weapon %q", where, w.Status, id)
+		}
+	}
+	if a.Ability != "" {
+		oneOf(v, where, "attack ability", a.Ability, Abilities)
+	}
+	return a
 }

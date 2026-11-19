@@ -81,6 +81,33 @@ func TestOnlyApprovedEntriesLoad(t *testing.T) {
 	}
 }
 
+func TestOffHandAttackNeedsTwoDifferentLightWeapons(t *testing.T) {
+	light := func(id string) string {
+		return strings.Replace(strings.Replace(weapon, `"club"`, `"`+id+`"`, 1), `"reach_ft":5`, `"reach_ft":5,"properties":["light"]`, 1)
+	}
+	withOffHand := func(main, off string) string {
+		b := strings.Replace(block("approved", main), `"attack"`,
+			`"off_hand":{"weapon":"`+off+`","ability":"dex","to_hit":0,"damage_bonus":0},"attack"`, 1)
+		return doc(weapon+","+light("dagger")+","+light("sickle"), b)
+	}
+	c, err := content.Parse([]byte(withOffHand("sickle", "dagger")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sb, _ := c.StatBlock("thug"); sb.OffHand == nil || sb.OffHand.Weapon != "dagger" {
+		t.Fatalf("off hand = %+v", sb.OffHand)
+	}
+	for in, want := range map[string]string{
+		withOffHand("club", "dagger"):   "off_hand needs Light weapons",
+		withOffHand("dagger", "dagger"): "off_hand must use a different weapon",
+		withOffHand("sickle", "wand"):   `off_hand.weapon references unknown id "wand"`,
+	} {
+		if _, err := content.Parse([]byte(in)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %v, want containing %q", err, want)
+		}
+	}
+}
+
 func TestEmbeddedSRDContentLoads(t *testing.T) {
 	c, err := srd.Load()
 	if err != nil {

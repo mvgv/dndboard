@@ -28,6 +28,15 @@
       "properties": ["finesse", "light"]
     },
     {
+      "id": "dagger",
+      "name": "Dagger",
+      "status": "approved",
+      "source": "SRD 5.2 Equipment, Simple Melee Weapons",
+      "damage": {"dice_count": 1, "dice_sides": 4, "type": "Piercing"},
+      "reach_ft": 5,
+      "properties": ["finesse", "light", "thrown"]
+    },
+    {
       "id": "greataxe",
       "name": "Greataxe",
       "status": "approved",
@@ -116,6 +125,7 @@
       "speed_ft": 30,
       "initiative_mod": 3,
       "attack": {"weapon": "shortsword", "ability": "dex", "to_hit": 5, "damage_bonus": 3},
+      "off_hand": {"weapon": "dagger", "ability": "dex", "to_hit": 5, "damage_bonus": 0},
       "features": ["sneak-attack"]
     },
     {
