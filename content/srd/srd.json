@@ -6,7 +6,8 @@
       "status": "approved",
       "source": "SRD 5.2 Equipment, Martial Melee Weapons",
       "damage": {"dice_count": 1, "dice_sides": 8, "type": "Slashing"},
-      "reach_ft": 5
+      "reach_ft": 5,
+      "properties": ["versatile"]
     },
     {
       "id": "scimitar",
@@ -14,7 +15,83 @@
       "status": "approved",
       "source": "SRD 5.2 Monsters, Goblin Warrior",
       "damage": {"dice_count": 1, "dice_sides": 6, "type": "Slashing"},
-      "reach_ft": 5
+      "reach_ft": 5,
+      "properties": ["finesse", "light"]
+    },
+    {
+      "id": "shortsword",
+      "name": "Shortsword",
+      "status": "approved",
+      "source": "SRD 5.2 Equipment, Martial Melee Weapons",
+      "damage": {"dice_count": 1, "dice_sides": 6, "type": "Piercing"},
+      "reach_ft": 5,
+      "properties": ["finesse", "light"]
+    },
+    {
+      "id": "greataxe",
+      "name": "Greataxe",
+      "status": "approved",
+      "source": "SRD 5.2 Equipment, Martial Melee Weapons",
+      "damage": {"dice_count": 1, "dice_sides": 12, "type": "Slashing"},
+      "reach_ft": 5,
+      "properties": ["heavy", "two-handed"]
+    }
+  ],
+  "features": [
+    {
+      "id": "sneak-attack",
+      "name": "Sneak Attack",
+      "status": "approved",
+      "source": "SRD 5.2 Classes, Rogue, Level 1: Sneak Attack (1d6 at Rogue level 1)",
+      "effects": [
+        {
+          "trigger": "attack_hit",
+          "conditions": [
+            {"any_of": [{"weapon_property": "finesse"}, {"ranged_weapon": true}]},
+            {"any_of": [
+              {"roll": "advantage"},
+              {"all_of": [{"ally_near_target_ft": 5}, {"roll": "not_disadvantage"}]}
+            ]}
+          ],
+          "frequency": "once_per_turn",
+          "outcome": {"extra_damage": {"dice_count": 1, "dice_sides": 6, "type": "weapon"}}
+        }
+      ]
+    },
+    {
+      "id": "rage",
+      "name": "Rage",
+      "status": "approved",
+      "source": "SRD 5.2 Classes, Barbarian, Level 1: Rage (2 Rages, +2 Rage Damage at Barbarian level 1)",
+      "activation": {
+        "cost": "bonus_action",
+        "uses": 2,
+        "lasts": "until_end_of_next_turn",
+        "extended_by": ["attack_roll_against_enemy", "bonus_action"],
+        "max_rounds": 100,
+        "ends_on": ["incapacitated"]
+      },
+      "effects": [
+        {
+          "trigger": "damage_taken",
+          "conditions": [{"damage_type": ["Bludgeoning", "Piercing", "Slashing"]}],
+          "frequency": "always",
+          "outcome": {"resistance": true}
+        },
+        {
+          "trigger": "attack_hit",
+          "conditions": [{"attack_ability": "str"}],
+          "frequency": "always",
+          "outcome": {"damage_bonus": 2}
+        }
+      ]
+    },
+    {
+      "id": "savage-attacker",
+      "name": "Savage Attacker",
+      "status": "approved",
+      "source": "SRD 5.2 Feats, Origin Feats, Savage Attacker",
+      "requires_implementation": true
     }
   ],
   "stat_blocks": [
@@ -27,7 +104,31 @@
       "max_hp": 12,
       "speed_ft": 30,
       "initiative_mod": 1,
-      "attack": {"weapon": "longsword", "to_hit": 5, "damage_bonus": 3}
+      "attack": {"weapon": "longsword", "ability": "str", "to_hit": 5, "damage_bonus": 3}
+    },
+    {
+      "id": "rogue-1",
+      "name": "Rogue",
+      "status": "approved",
+      "source": "SRD 5.2 Classes, Rogue level 1: Str 10, Dex 16, Con 14, Leather Armor",
+      "ac": 14,
+      "max_hp": 10,
+      "speed_ft": 30,
+      "initiative_mod": 3,
+      "attack": {"weapon": "shortsword", "ability": "dex", "to_hit": 5, "damage_bonus": 3},
+      "features": ["sneak-attack"]
+    },
+    {
+      "id": "barbarian-1",
+      "name": "Barbarian",
+      "status": "approved",
+      "source": "SRD 5.2 Classes, Barbarian level 1, Soldier background (Savage Attacker): Str 16, Dex 14, Con 14, Unarmored Defense",
+      "ac": 14,
+      "max_hp": 14,
+      "speed_ft": 30,
+      "initiative_mod": 2,
+      "attack": {"weapon": "greataxe", "ability": "str", "to_hit": 5, "damage_bonus": 3},
+      "features": ["rage", "savage-attacker"]
     },
     {
       "id": "goblin-warrior",
@@ -38,7 +139,7 @@
       "max_hp": 10,
       "speed_ft": 30,
       "initiative_mod": 2,
-      "attack": {"weapon": "scimitar", "to_hit": 4, "damage_bonus": 2}
+      "attack": {"weapon": "scimitar", "ability": "dex", "to_hit": 4, "damage_bonus": 2}
     }
   ]
 }

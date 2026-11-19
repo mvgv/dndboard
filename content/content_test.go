@@ -13,7 +13,7 @@ const weapon = `{"id":"club","name":"Club","status":"approved","source":"s",
 
 func block(status, weaponID string) string {
 	return `{"id":"thug","name":"Thug","status":"` + status + `","source":"s","ac":11,"max_hp":5,
- "speed_ft":30,"initiative_mod":0,"attack":{"weapon":"` + weaponID + `","to_hit":0,"damage_bonus":0}}`
+ "speed_ft":30,"initiative_mod":0,"attack":{"weapon":"` + weaponID + `","ability":"str","to_hit":0,"damage_bonus":0}}`
 }
 
 func doc(weapons, blocks string) string {

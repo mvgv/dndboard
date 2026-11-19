@@ -32,12 +32,17 @@ type Weapon struct {
 	Source  string // where the rules text lives, e.g. an SRD section
 	Damage  Damage
 	ReachFt int
+	// Properties are the weapon's properties, e.g. "finesse" (SRD "Equipment").
+	Properties []string
+	// Ranged: a Ranged weapon rather than a Melee one.
+	Ranged bool
 }
 
 // Attack is a stat block's use of a weapon, with the modifiers already summed
 // (ability modifier plus Proficiency Bonus where it applies).
 type Attack struct {
 	Weapon      string // Weapon ID
+	Ability     string // "str" or "dex": the modifier used for attack and damage
 	ToHit       int
 	DamageBonus int
 }
@@ -53,12 +58,14 @@ type StatBlock struct {
 	SpeedFt       int
 	InitiativeMod int
 	Attack        Attack
+	Features      []string // Feature IDs
 }
 
 // Compendium holds the approved entries of a validated document.
 type Compendium struct {
 	weapons    map[string]Weapon
 	statBlocks map[string]StatBlock
+	features   map[string]Feature
 }
 
 // Weapon returns the approved weapon with the given ID.
@@ -73,12 +80,19 @@ func (c *Compendium) StatBlock(id string) (StatBlock, bool) {
 	return s, ok
 }
 
+// Feature returns the approved feature with the given ID.
+func (c *Compendium) Feature(id string) (Feature, bool) {
+	f, ok := c.features[id]
+	return f, ok
+}
+
 // Wire types: pointers mark required fields whose zero value is legal, so a
 // missing field is distinguishable from 0.
 type (
 	rawDocument struct {
 		Weapons    []rawWeapon    `json:"weapons"`
 		StatBlocks []rawStatBlock `json:"stat_blocks"`
+		Features   []rawFeature   `json:"features"`
 	}
 	rawDamage struct {
 		DiceCount *int    `json:"dice_count"`
@@ -86,15 +100,18 @@ type (
 		Type      *string `json:"type"`
 	}
 	rawWeapon struct {
-		ID      *string    `json:"id"`
-		Name    *string    `json:"name"`
-		Status  *string    `json:"status"`
-		Source  *string    `json:"source"`
-		Damage  *rawDamage `json:"damage"`
-		ReachFt *int       `json:"reach_ft"`
+		ID         *string    `json:"id"`
+		Name       *string    `json:"name"`
+		Status     *string    `json:"status"`
+		Source     *string    `json:"source"`
+		Damage     *rawDamage `json:"damage"`
+		ReachFt    *int       `json:"reach_ft"`
+		Properties []string   `json:"properties"`
+		Ranged     bool       `json:"ranged"`
 	}
 	rawAttack struct {
 		Weapon      *string `json:"weapon"`
+		Ability     *string `json:"ability"`
 		ToHit       *int    `json:"to_hit"`
 		DamageBonus *int    `json:"damage_bonus"`
 	}
@@ -108,13 +125,17 @@ type (
 		SpeedFt       *int       `json:"speed_ft"`
 		InitiativeMod *int       `json:"initiative_mod"`
 		Attack        *rawAttack `json:"attack"`
+		Features      []string   `json:"features"`
 	}
 )
 
 // Parse validates a JSON document and returns its approved entries. It fails
 // with every problem found: malformed or mistyped JSON, unknown fields,
-// missing required fields, duplicate IDs, out-of-range values, references to
-// unknown IDs, and approved entries that reference unapproved ones.
+// missing required fields, duplicate IDs, out-of-range values, values outside
+// a vocabulary (damage types, weapon properties, effect triggers, conditions
+// and outcomes), effects whose conditions or outcome don't fit their trigger,
+// references to unknown IDs, and approved entries that reference unapproved
+// ones.
 func Parse(data []byte) (*Compendium, error) {
 	var doc rawDocument
 	dec := json.NewDecoder(bytes.NewReader(data))
@@ -139,9 +160,21 @@ func Parse(data []byte) (*Compendium, error) {
 		}
 		weapons[w.ID] = w
 	}
+	features := map[string]Feature{}
+	for i, rf := range doc.Features {
+		f, ok := v.feature(i, rf)
+		if !ok {
+			continue
+		}
+		if _, dup := features[f.ID]; dup {
+			v.errf("features[%d]: duplicate id %q", i, f.ID)
+			continue
+		}
+		features[f.ID] = f
+	}
 	blocks := map[string]StatBlock{}
 	for i, rs := range doc.StatBlocks {
-		s, ok := v.statBlock(i, rs, weapons)
+		s, ok := v.statBlock(i, rs, weapons, features)
 		if !ok {
 			continue
 		}
@@ -155,10 +188,15 @@ func Parse(data []byte) (*Compendium, error) {
 		return nil, fmt.Errorf("content: invalid document:\n  %s", strings.Join(v.problems, "\n  "))
 	}
 
-	c := &Compendium{weapons: map[string]Weapon{}, statBlocks: map[string]StatBlock{}}
+	c := &Compendium{weapons: map[string]Weapon{}, statBlocks: map[string]StatBlock{}, features: map[string]Feature{}}
 	for id, w := range weapons {
 		if w.Status == Approved {
 			c.weapons[id] = w
+		}
+	}
+	for id, f := range features {
+		if f.Status == Approved {
+			c.features[id] = f
 		}
 	}
 	for id, s := range blocks {
@@ -214,6 +252,7 @@ func (v *validator) weapon(i int, r rawWeapon) (Weapon, bool) {
 		Name:   v.str(where, "name", r.Name),
 		Status: v.status(where, r.Status),
 		Source: v.str(where, "source", r.Source),
+		Ranged: r.Ranged,
 	}
 	if w.ID != "" {
 		where = fmt.Sprintf("weapon %q", w.ID)
@@ -227,11 +266,18 @@ func (v *validator) weapon(i int, r rawWeapon) (Weapon, bool) {
 			DiceSides: v.num(where, "damage.dice_sides", r.Damage.DiceSides, 2),
 			Type:      v.str(where, "damage.type", r.Damage.Type),
 		}
+		if w.Damage.Type != "" {
+			oneOf(v, where, "damage type", w.Damage.Type, DamageTypes)
+		}
 	}
+	for _, p := range r.Properties {
+		oneOf(v, where, "weapon property", p, WeaponProperties)
+	}
+	w.Properties = r.Properties
 	return w, len(v.problems) == before
 }
 
-func (v *validator) statBlock(i int, r rawStatBlock, weapons map[string]Weapon) (StatBlock, bool) {
+func (v *validator) statBlock(i int, r rawStatBlock, weapons map[string]Weapon, features map[string]Feature) (StatBlock, bool) {
 	before := len(v.problems)
 	where := fmt.Sprintf("stat_blocks[%d]", i)
 	s := StatBlock{
@@ -252,6 +298,7 @@ func (v *validator) statBlock(i int, r rawStatBlock, weapons map[string]Weapon) 
 	} else {
 		s.Attack = Attack{
 			Weapon:      v.str(where, "attack.weapon", r.Attack.Weapon),
+			Ability:     v.str(where, "attack.ability", r.Attack.Ability),
 			ToHit:       v.num(where, "attack.to_hit", r.Attack.ToHit, -100),
 			DamageBonus: v.num(where, "attack.damage_bonus", r.Attack.DamageBonus, -100),
 		}
@@ -264,6 +311,19 @@ func (v *validator) statBlock(i int, r rawStatBlock, weapons map[string]Weapon) 
 				v.errf("%s: approved but references %s weapon %q", where, w.Status, id)
 			}
 		}
+		if s.Attack.Ability != "" {
+			oneOf(v, where, "attack ability", s.Attack.Ability, Abilities)
+		}
 	}
+	for _, id := range r.Features {
+		f, ok := features[id]
+		switch {
+		case !ok:
+			v.errf("%s: references unknown feature %q", where, id)
+		case s.Status == Approved && f.Status != Approved:
+			v.errf("%s: approved but references %s feature %q", where, f.Status, id)
+		}
+	}
+	s.Features = r.Features
 	return s, len(v.problems) == before
 }
