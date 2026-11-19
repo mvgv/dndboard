@@ -2,6 +2,7 @@ package session
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/mvgv/dndboard/server/board"
 )
@@ -23,6 +24,23 @@ type MeleeAttack struct {
 	DamageType  string
 	ReachFt     int
 }
+
+// ReactionRule says how a creature's Reaction to an Opportunity Attack
+// opportunity is decided.
+type ReactionRule int
+
+const (
+	// ReactAlways attacks without prompting. It is the zero value, and the
+	// rule monsters use: their reactions are decided without prompting.
+	ReactAlways ReactionRule = iota
+	// ReactNever never reacts, without prompting.
+	ReactNever
+	// ReactAsk pauses the game and prompts the owner, who has the session's
+	// reaction timeout to answer; no answer means no reaction. It is the
+	// setting for a Player Character without an automatic rule. Monsters'
+	// specs must never use it: their reactions are not prompted.
+	ReactAsk
+)
 
 // CreatureSpec is a creature placed on the Board when the session starts.
 type CreatureSpec struct {
@@ -59,6 +77,8 @@ type CreatureSpec struct {
 	SaveMods, CheckMods map[Ability]int
 	// MedicineMod is the Wisdom (Medicine) check modifier, used to stabilize.
 	MedicineMod int
+	// Reactions decides Opportunity Attacks; see ReactionRule.
+	Reactions ReactionRule
 }
 
 // Ability is one of the six abilities.
@@ -170,6 +190,9 @@ const (
 	BonusActionUsed
 	NoSuchOption
 	Incapacitated
+	// AwaitingReaction: the game is paused until the pending prompt is answered.
+	AwaitingReaction
+	NoPendingReaction
 )
 
 func (c Code) String() string {
@@ -192,6 +215,10 @@ func (c Code) String() string {
 		return "NoSuchOption"
 	case Incapacitated:
 		return "Incapacitated"
+	case AwaitingReaction:
+		return "AwaitingReaction"
+	case NoPendingReaction:
+		return "NoPendingReaction"
 	}
 	return fmt.Sprintf("Code(%d)", int(c))
 }
@@ -275,6 +302,23 @@ type OpportunityAttackMade struct{ Attacker, Target ID }
 // CreatureLeft: the creature fled or surrendered and is out of the combat.
 type CreatureLeft struct{ Creature ID }
 
+// ReactionPrompted: the game is paused and Creature's owner is asked whether
+// it makes an Opportunity Attack against Target, within Timeout.
+type ReactionPrompted struct {
+	Creature, Target ID
+	Timeout          time.Duration
+}
+
+// ReactionDeclined: the owner chose not to react.
+type ReactionDeclined struct{ Creature ID }
+
+// ReactionTimedOut: the timeout passed without an answer; no reaction.
+type ReactionTimedOut struct{ Creature ID }
+
+func (ReactionPrompted) event() {}
+func (ReactionDeclined) event() {}
+func (ReactionTimedOut) event() {}
+
 func (Dashed) event()                {}
 func (Disengaged) event()            {}
 func (OpportunityAttackMade) event() {}
@@ -322,6 +366,14 @@ type State struct {
 	Creatures map[ID]CreatureState
 	Over      bool
 	Winner    Team
+	// Pending is the reaction prompt the game is paused on, if any.
+	Pending *PendingReaction
+}
+
+// PendingReaction is an unanswered reaction prompt.
+type PendingReaction struct {
+	Creature, Target ID
+	Remaining        time.Duration
 }
 
 // MoveOption is a square the active creature can reach this turn.

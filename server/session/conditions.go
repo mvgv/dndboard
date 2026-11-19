@@ -164,6 +164,9 @@ func (s *Session) Apply(e Effect) ([]Event, error) {
 	if s.over {
 		return nil, reject(CombatOver, "combat is over")
 	}
+	if s.pending != nil {
+		return nil, reject(AwaitingReaction, "waiting for %s to answer a reaction prompt", s.pending.asked)
+	}
 	var out []Event
 	switch e := e.(type) {
 	case InflictCondition:
