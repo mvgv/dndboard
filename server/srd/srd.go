@@ -15,8 +15,15 @@ import (
 // Fighter is the level 1 Fighter stat block (id "fighter-1"), on the party team.
 func Fighter() session.CreatureSpec { return must(creature(characters, "fighter-1", "party")) }
 
-// GoblinWarrior is the SRD Goblin Warrior stat block, on the monsters team.
-func GoblinWarrior() session.CreatureSpec { return must(Monster("goblin-warrior")) }
+// GoblinWarrior is the SRD Goblin Warrior stat block, on the monsters team. Its
+// Bonus Action, Nimble Escape (SRD 5.2 "Monsters", Goblin Warrior), is set here
+// because the content format does not carry traits yet (the Forge lists it as
+// omitted in review).
+func GoblinWarrior() session.CreatureSpec {
+	g := must(Monster("goblin-warrior"))
+	g.NimbleEscape = true // Disengage; Hide is not modeled yet
+	return g
+}
 
 // Monster builds the approved monster stat block with the given ID, on the
 // monsters team. Draft stat blocks are not available.
