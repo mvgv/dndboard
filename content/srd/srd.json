@@ -1,0 +1,44 @@
+{
+  "weapons": [
+    {
+      "id": "longsword",
+      "name": "Longsword",
+      "status": "approved",
+      "source": "SRD 5.2 Equipment, Martial Melee Weapons",
+      "damage": {"dice_count": 1, "dice_sides": 8, "type": "Slashing"},
+      "reach_ft": 5
+    },
+    {
+      "id": "scimitar",
+      "name": "Scimitar",
+      "status": "approved",
+      "source": "SRD 5.2 Monsters, Goblin Warrior",
+      "damage": {"dice_count": 1, "dice_sides": 6, "type": "Slashing"},
+      "reach_ft": 5
+    }
+  ],
+  "stat_blocks": [
+    {
+      "id": "fighter-1",
+      "name": "Fighter",
+      "status": "approved",
+      "source": "SRD 5.2 Classes, Fighter level 1: Str 16, Dex 12, Con 14, Chain Mail",
+      "ac": 16,
+      "max_hp": 12,
+      "speed_ft": 30,
+      "initiative_mod": 1,
+      "attack": {"weapon": "longsword", "to_hit": 5, "damage_bonus": 3}
+    },
+    {
+      "id": "goblin-warrior",
+      "name": "Goblin Warrior",
+      "status": "approved",
+      "source": "SRD 5.2 Monsters, Goblin Warrior",
+      "ac": 15,
+      "max_hp": 10,
+      "speed_ft": 30,
+      "initiative_mod": 2,
+      "attack": {"weapon": "scimitar", "to_hit": 4, "damage_bonus": 2}
+    }
+  ]
+}
