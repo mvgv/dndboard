@@ -4,6 +4,7 @@ package srd
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/mvgv/dndboard/content"
 	contentsrd "github.com/mvgv/dndboard/content/srd"
@@ -16,8 +17,8 @@ func Fighter() session.CreatureSpec { return mustCreature("fighter-1", "party") 
 // GoblinWarrior is the SRD Goblin Warrior stat block, on the monsters team.
 func GoblinWarrior() session.CreatureSpec { return mustCreature("goblin-warrior", "monsters") }
 
-// Creature builds a CreatureSpec from an approved stat block and its weapon.
-func Creature(c *content.Compendium, statBlockID string, team session.Team) (session.CreatureSpec, error) {
+// creature builds a CreatureSpec from an approved stat block and its weapon.
+func creature(c *content.Compendium, statBlockID string, team session.Team) (session.CreatureSpec, error) {
 	sb, ok := c.StatBlock(statBlockID)
 	if !ok {
 		return session.CreatureSpec{}, fmt.Errorf("srd: no approved stat block %q", statBlockID)
@@ -42,12 +43,14 @@ func Creature(c *content.Compendium, statBlockID string, team session.Team) (ses
 	}, nil
 }
 
+var compendium = sync.OnceValues(contentsrd.Load)
+
 func mustCreature(id string, team session.Team) session.CreatureSpec {
-	c, err := contentsrd.Load()
+	c, err := compendium()
 	if err != nil {
 		panic(err)
 	}
-	spec, err := Creature(c, id, team)
+	spec, err := creature(c, id, team)
 	if err != nil {
 		panic(err)
 	}

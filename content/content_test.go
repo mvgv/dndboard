@@ -86,7 +86,9 @@ func TestEmbeddedSRDContentLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := c.StatBlockIDs(); len(got) != 2 {
-		t.Fatalf("stat blocks = %v", got)
+	for _, id := range []string{"fighter-1", "goblin-warrior"} {
+		if _, ok := c.StatBlock(id); !ok {
+			t.Errorf("stat block %q missing", id)
+		}
 	}
 }

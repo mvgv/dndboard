@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sort"
 	"strings"
 )
 
@@ -72,16 +71,6 @@ func (c *Compendium) Weapon(id string) (Weapon, bool) {
 func (c *Compendium) StatBlock(id string) (StatBlock, bool) {
 	s, ok := c.statBlocks[id]
 	return s, ok
-}
-
-// StatBlockIDs returns the sorted IDs of the approved stat blocks.
-func (c *Compendium) StatBlockIDs() []string {
-	ids := make([]string, 0, len(c.statBlocks))
-	for id := range c.statBlocks {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	return ids
 }
 
 // Wire types: pointers mark required fields whose zero value is legal, so a
