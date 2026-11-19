@@ -503,3 +503,68 @@ func TestObjectPlacementIsValidated(t *testing.T) {
 		}
 	}
 }
+
+// Dodge: "you make Dexterity saving throws with Advantage."
+func TestDodgeGivesAdvantageOnDexteritySaves(t *testing.T) {
+	// Save d20s 4 and 15: Advantage keeps 15.
+	s := start(t, dice.Fixed(15, 10, 4, 15), fighter("fighter", 1, 2), goblin("goblin", 6, 2))
+	submit(t, s, session.Dodge{Actor: "fighter"})
+	ev, err := s.Apply(session.SavingThrow{Target: "fighter", Ability: session.Dexterity, DC: 13})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := find[session.SaveRolled](ev); r.Mode != session.Advantage || r.D20 != 15 {
+		t.Fatalf("save = %+v, want Advantage keeping 15", r)
+	}
+}
+
+// "You lose these benefits if you have the Incapacitated condition."
+func TestDodgeIsLostWhileIncapacitated(t *testing.T) {
+	s := start(t, dice.Fixed(15, 10, 9), fighter("fighter", 1, 2), goblin("goblin", 2, 2))
+	submit(t, s, session.Dodge{Actor: "fighter"})
+	if _, err := s.Apply(session.InflictCondition{Target: "fighter", Condition: session.CondIncapacitated}); err != nil {
+		t.Fatal(err)
+	}
+	if s.State().Creatures["fighter"].Dodging {
+		t.Fatal("an Incapacitated creature loses Dodge")
+	}
+	// The goblin attacks with a single die (no Disadvantage): 9 + 4 = 13 < 16.
+	endTurn(t, s)
+	ev := submit(t, s, session.Attack{Actor: "goblin", Target: "fighter"})
+	if a, _ := find[session.AttackRolled](ev); a.Mode != session.Normal {
+		t.Fatalf("mode = %q, want a normal roll", a.Mode)
+	}
+}
+
+// Hide gives the Invisible condition while hidden; it ends with the hiding.
+func TestHideAppliesInvisibleUntilFound(t *testing.T) {
+	g := goblin("goblin", 3, 1)
+	g.PerceptionMod = 1
+	// Hide 14 + 2 = 16; the goblin finds it with 15 + 1 = 16.
+	s := startOn(t, obscuredRoom, nil, dice.Fixed(15, 10, 14, 15), scout("fighter", 2, 1), g)
+	submit(t, s, session.Hide{Actor: "fighter"})
+	if !slices.Contains(s.State().Creatures["fighter"].Conditions, session.CondInvisible) {
+		t.Fatal("a hidden creature is Invisible")
+	}
+	endTurn(t, s)
+	ev := submit(t, s, session.Search{Actor: "goblin"})
+	if _, ok := find[session.ConditionRemoved](ev); !ok {
+		t.Fatalf("events = %+v, want Invisible removed when found", ev)
+	}
+	if slices.Contains(s.State().Creatures["fighter"].Conditions, session.CondInvisible) {
+		t.Fatal("the fighter should be visible again")
+	}
+}
+
+func TestIncapacitatedCreatureCannotTakeStandardActions(t *testing.T) {
+	s := start(t, dice.Fixed(15, 10), fighter("fighter", 1, 2), goblin("goblin", 2, 2))
+	if _, err := s.Apply(session.InflictCondition{Target: "fighter", Condition: session.CondIncapacitated}); err != nil {
+		t.Fatal(err)
+	}
+	if rej := rejection(t, s, session.Dodge{Actor: "fighter"}); rej.Code != session.Incapacitated {
+		t.Fatalf("code = %v, want Incapacitated", rej.Code)
+	}
+	if la := s.LegalActions(); la.Dodge || la.Search || la.Ready {
+		t.Fatalf("no standard action while Incapacitated: %+v", la)
+	}
+}

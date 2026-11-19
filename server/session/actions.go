@@ -10,14 +10,17 @@ import (
 // The standard actions beyond Attack, Dash and Disengage (SRD 5.2 "Rules
 // Glossary": Dodge, Help, Hide, Ready, Search, Utilize). Where the text leaves
 // room, this comment records the reading taken:
-//   - Dodge's Dexterity-save Advantage is only a flag (no saves yet), and losing
-//     it to Incapacitated or Speed 0 is not modeled.
+//   - Dodge gives Disadvantage on attacks against the creature and Advantage on
+//     its Dexterity saving throws, until the start of its next turn; it is lost
+//     while the creature is Incapacitated or has Speed 0. That the creature can
+//     see the attacker is assumed.
 //   - Help (ability check) accepts only the skills the session can roll
 //     (Perception for Search, Stealth for Hide) and reaches allies within 5 feet.
-//   - Hide needs a Heavily Obscured square; Cover is not modeled. Hidden
-//     creatures can't be targeted, are not seen by Opportunity Attacks or Ready
-//     triggers, and make attack rolls with Advantage. Only attacking or being
-//     found by Search ends hiding (sounds and Verbal spells are not modeled).
+//   - Hide needs a Heavily Obscured square; Cover is not modeled. A hidden
+//     creature has the Invisible condition (so attackMode gives it Advantage and
+//     its attackers Disadvantage), can't be chosen as a target, is not seen by
+//     Opportunity Attacks or Ready triggers. Only attacking or being found by
+//     Search ends hiding (sounds and Verbal spells are not modeled).
 //   - A Readied response fires on its trigger without asking whether to ignore it.
 
 // DC for a Dexterity (Stealth) check to Hide (SRD glossary, Hide).
@@ -37,19 +40,24 @@ type helpCheck struct {
 
 type object struct{ ObjectSpec }
 
-// rollD20 rolls a d20 test; Advantage and Disadvantage cancel out.
-func (s *Session) rollD20(adv, dis bool) (int, RollMode) {
-	d := s.dice.Roll(20)
-	switch {
-	case adv == dis:
-		return d, Normal
-	case adv:
-		return max(d, s.dice.Roll(20)), Advantage
-	}
-	return min(d, s.dice.Roll(20)), Disadvantage
+// hidden reports whether the creature is hidden: it has the Invisible condition
+// from a successful Hide action.
+func (c *creature) hidden() bool { return c.hideDC > 0 && c.own(CondInvisible) }
+
+// dodgeActive: the Dodge benefits are lost while Incapacitated or at Speed 0.
+func (c *creature) dodgeActive() bool {
+	return c.dodging && !c.incapacitated() && c.speed() > 0
 }
 
-// rollCheck rolls an ability check for c, spending a Help it was given for skill.
+// reveal ends hiding: the creature stops being Invisible.
+func (s *Session) reveal(c *creature, reason string) []Event {
+	c.hideDC = 0
+	return append([]Event{Revealed{Creature: c.ID, Reason: reason}}, s.clear(c, CondInvisible)...)
+}
+
+// rollCheck rolls an ability check for c, spending a Help it was given for
+// skill. Poisoned and Frightened give Disadvantage; Exhaustion lowers the total
+// through the caller's modifier (see d20Penalty).
 func (s *Session) rollCheck(c *creature, skill string) (d20 int, mode RollMode) {
 	adv := false
 	for i, h := range s.helpChecks {
@@ -59,7 +67,7 @@ func (s *Session) rollCheck(c *creature, skill string) (d20 int, mode RollMode) 
 			break
 		}
 	}
-	return s.rollD20(adv, false)
+	return s.rollD20(adv, c.checkDisadvantage())
 }
 
 // consumeHelpAttack spends one Help given to c's team against t, if any.
@@ -82,6 +90,9 @@ func (s *Session) expireHelp(helper ID) {
 }
 
 func (s *Session) checkAction() *Rejection {
+	if c := s.active(); c.incapacitated() {
+		return reject(Incapacitated, "%s is Incapacitated and can't take actions", c.ID)
+	}
 	if s.acted {
 		return reject(ActionUsed, "%s already took an action this turn", s.active().ID)
 	}
@@ -105,7 +116,7 @@ func (s *Session) standardAction(in Intent) ([]Event, error) {
 			return nil, reject(InvalidTarget, "no creature %q", in.Target)
 		case t.Team == c.Team:
 			return nil, reject(InvalidTarget, "%s is not hostile", t.ID)
-		case t.out() || t.hidden:
+		case t.out() || t.hidden():
 			return nil, reject(InvalidTarget, "%s is down, gone or can't be seen", t.ID)
 		case board.Distance(c.Pos, t.Pos) > 1:
 			return nil, reject(OutOfReach, "%s is beyond 5 feet of %s", t.ID, c.ID)
@@ -129,23 +140,31 @@ func (s *Session) standardAction(in Intent) ([]Event, error) {
 			return nil, reject(NoSuchOption, "%s is not Heavily Obscured, so it can't Hide", c.ID)
 		}
 		d20, mode := s.rollCheck(c, Stealth)
-		total := d20 + c.StealthMod
+		mod := c.StealthMod - c.d20Penalty()
+		total := d20 + mod
 		ok := total >= hideDC
+		out = []Event{Hid{Creature: c.ID, D20: d20, Modifier: mod, Total: total, Mode: mode, Hidden: ok}}
 		if ok {
-			c.hidden, c.hideDC = true, total
+			// "On a successful check, you have the Invisible condition while
+			// hidden"; the total is the DC to find you.
+			ev := s.inflict(c, CondInvisible, "")
+			if c.own(CondInvisible) {
+				c.hideDC = total
+			}
+			out = append(out, ev...)
 		}
-		out = []Event{Hid{Creature: c.ID, D20: d20, Modifier: c.StealthMod, Total: total, Mode: mode, Hidden: ok}}
 	case Search:
 		d20, mode := s.rollCheck(c, Perception)
-		total := d20 + c.PerceptionMod
+		mod := c.PerceptionMod - c.d20Penalty()
+		total := d20 + mod
 		var found []ID
 		for _, id := range s.order {
-			if o := s.creatures[id]; o.Team != c.Team && o.hidden && total >= o.hideDC {
-				o.hidden = false
+			if o := s.creatures[id]; o.Team != c.Team && o.hidden() && total >= o.hideDC {
+				out = append(out, s.reveal(o, "found by Search")...)
 				found = append(found, id)
 			}
 		}
-		out = []Event{Searched{Creature: c.ID, D20: d20, Modifier: c.PerceptionMod, Total: total, Mode: mode, Found: found}}
+		out = append([]Event{Searched{Creature: c.ID, D20: d20, Modifier: mod, Total: total, Mode: mode, Found: found}}, out...)
 	case Utilize:
 		o, ok := s.objects[in.Object]
 		if !ok {
@@ -196,7 +215,7 @@ func (s *Session) validReady(in Ready) *Rejection {
 // fireReadied runs the Readied actions that mover's move from a square set off.
 // A Reaction is spent whether or not the response can still be carried out.
 func (s *Session) fireReadied(mover *creature, from board.Pos) []Event {
-	if mover.hidden {
+	if mover.hidden() {
 		return nil // nobody perceives it
 	}
 	var out []Event
@@ -205,7 +224,7 @@ func (s *Session) fireReadied(mover *creature, from board.Pos) []Event {
 		if s.over || mover.out() || s.pending != nil {
 			break
 		}
-		if r.ready == nil || r.Team == mover.Team || r.out() || r.reactionUsed {
+		if r.ready == nil || r.Team == mover.Team || r.out() || r.reactionUsed || r.incapacitated() {
 			continue
 		}
 		t := r.ready.trigger
@@ -372,7 +391,7 @@ func (s *Session) useObject(c *creature, o *object) ([]Event, *Rejection) {
 
 // standardActionOptions fills in the legal choices for the unspent action.
 func (s *Session) standardActionOptions(c *creature, la *LegalActions) {
-	if s.acted {
+	if s.acted || c.incapacitated() {
 		return
 	}
 	la.Dodge, la.Search, la.Ready = true, true, true
@@ -384,7 +403,7 @@ func (s *Session) standardActionOptions(c *creature, la *LegalActions) {
 		}
 		if o.Team == c.Team {
 			la.HelpCheck = append(la.HelpCheck, id)
-		} else if !o.hidden {
+		} else if !o.hidden() {
 			la.HelpAttack = append(la.HelpAttack, id)
 		}
 	}
