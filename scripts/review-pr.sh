@@ -57,10 +57,17 @@ OUT=$(mktemp)
 log "Reviewing PR #$PR (issue #$ISSUE) at ${SHA:0:7} with $MODEL"
 cd "$WT"
 set +e
-claude --model "$MODEL" --disallowedTools Edit Write NotebookEdit -p "$prompt" > "$OUT" 2>>"$LOG"
+claude --model "$MODEL" --disallowedTools Edit Write NotebookEdit -p "$prompt" > "$OUT" 2> "$OUT.err"
 status=$?
 set -e
-cat "$OUT" >> "$LOG"
+cat "$OUT" "$OUT.err" >> "$LOG"
+
+if tail -n 20 "$OUT" "$OUT.err" | grep -qiE "hit your .*limit|usage limit reached" && ! grep -qE '^VERDICT:' "$OUT"; then
+  touch "$WS/state/usage-limited"
+  log "Usage limit hit; review of PR #$PR not counted as a failure and will be retried."
+  rm -f "$OUT" "$OUT.err"
+  exit 1
+fi
 
 verdict=$(tail -n 5 "$OUT" | sed -nE 's/^VERDICT:[[:space:]]*(pass|changes)[[:space:]]*$/\1/p' | tail -1)
 if [[ -z $verdict ]]; then
@@ -68,6 +75,7 @@ if [[ -z $verdict ]]; then
   fails=$(( $(cat "$fails_file" 2>/dev/null || echo 0) + 1 ))
   echo "$fails" > "$fails_file"
   log "No VERDICT line (claude status $status, failure $fails for this commit)."
+  rm -f "$OUT.err"
   if (( fails >= 2 )); then
     gh pr edit "$PR" -R "$REPO" --add-label needs-human >/dev/null || true
     gh pr comment "$PR" -R "$REPO" --body "Automatic review failed twice on ${SHA:0:7} without a verdict; see \`logs/review-$PR.log\` on the VPS." >/dev/null
@@ -87,5 +95,5 @@ if [[ $verdict == pass ]]; then
 else
   gh pr edit "$PR" -R "$REPO" --add-label changes-requested --remove-label review-passed >/dev/null || true
 fi
-rm -f "$OUT" "$OUT.body"
+rm -f "$OUT" "$OUT.body" "$OUT.err"
 log "Posted review of PR #$PR at ${SHA:0:7}: $verdict"

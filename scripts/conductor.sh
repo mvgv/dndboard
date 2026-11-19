@@ -8,6 +8,7 @@
 #   MAX_PARALLEL        tickets running at once (default 2)
 #   MAX_STARTS_PER_DAY  tickets started per day (default 6)
 #   SPEC_ISSUE          parent issue whose sub-issues are the tickets (default 1)
+#   LIMIT_PAUSE_MIN     idle this long after a session hits the usage limit (default 60)
 #   DRY_RUN=1           log what it would do, change nothing
 #
 # Kill switch: touch <workspace>/STOP. Log: <workspace>/logs/conductor.log.
@@ -58,6 +59,12 @@ if [[ $DRY_RUN != 1 && $(git -C "$MAIN" branch --show-current) == main ]]; then
   git -C "$MAIN" pull -q --ff-only || log "Warning: could not update $MAIN"
 fi
 
+# A session hit the Claude usage limit recently: start nothing until it has had time to reset.
+if [[ -n $(find "$STATE/usage-limited" -mmin -"${LIMIT_PAUSE_MIN:-60}" 2>/dev/null) ]]; then
+  log "Usage limit hit in the last ${LIMIT_PAUSE_MIN:-60} min; idle."
+  exit 0
+fi
+
 REPO=$(cd "$MAIN" && gh repo view --json nameWithOwner -q .nameWithOwner)
 
 windows() { tmux list-windows -t tickets -F '#W' 2>/dev/null || true; }
@@ -67,9 +74,9 @@ model_for() { [[ " $(issue_labels "$1") " == *" model:opus "* ]] && echo opus ||
 open_blockers() {
   gh api "repos/$REPO/issues/$1/dependencies/blocked_by" --jq '[.[] | select(.state == "open")] | length'
 }
-feedback() { # feedback <issue> <text>
+feedback() { # feedback <issue> <text> [kind]; kind "conflict" is not counted as a feedback round
   local f=$STATE/feedback-$1-$(date +%s).md
-  printf '%s\n' "$2" > "$f"
+  { if [[ -n ${3:-} ]]; then echo "KIND: $3"; fi; printf '%s\n' "$2"; } > "$f"
   act "$SCRIPTS/run-ticket.sh" "$1" --model "$(model_for "$1")" --detach --feedback-file "$f"
 }
 ready_label() { # ready_label <reason>; uses $PR
@@ -101,7 +108,7 @@ while read -r PR BRANCH <&3; do
   log "PR #$PR (#$N) ${SHA:0:7}: ci=$ci mergeable=$mergeable state=$mstate"
 
   if [[ $mergeable == CONFLICTING ]]; then
-    once "conflict-pr$PR-$SHA" feedback "$N" "PR #$PR has merge conflicts with main. Merge origin/main into $BRANCH, resolve the conflicts keeping the intent of both sides, run the checks, and push."
+    once "conflict-pr$PR-$SHA" feedback "$N" "PR #$PR has merge conflicts with main. Merge origin/main into $BRANCH, resolve the conflicts keeping the intent of both sides, run the checks, and push." conflict
     continue
   fi
   if [[ $ci == failure ]]; then
