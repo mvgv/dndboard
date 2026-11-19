@@ -21,9 +21,16 @@ import (
 //   - Vision is per Player Character: allies do not share what they see.
 //   - Passive Perception is 10 + the Perception bonus, minus 5 for Disadvantage
 //     (Dim Light on the hidden thing's square, or Poisoned/Frightened) and
-//     minus Exhaustion. It is checked at session start and whenever anything
-//     moves or a Door changes, for Player Characters only, against every
-//     hidden trap and secret door whose square the character sees.
+//     minus Exhaustion (the +5 for Advantage is not modeled: nothing grants it
+//     yet; Frightened is taken as Disadvantage without checking line of sight to
+//     its source, as checkDisadvantage does). It is checked at session start and
+//     after every intent, answer or timeout, for Player Characters only, against
+//     every hidden trap and secret door whose square the character sees.
+//   - Search is a Wisdom (Perception) check, so it has Disadvantage against
+//     things on Dim Light squares (Lightly Obscured): those get their own check.
+//   - Heavily Obscured terrain ('%') hides the squares inside it and blocks
+//     sight through it, which Darkness (a light level) does not: a lit square
+//     behind a dark one is still seen.
 //   - A hidden creature (Hide or HiddenDC) is never sent to anyone but its own
 //     team until found; unseen creatures are not sent either.
 
@@ -59,11 +66,19 @@ type TrapSpec struct {
 // TrapState is what a Player Character knows of a discovered trap.
 type TrapState struct{ Pos board.Pos }
 
+// DiscoveryKind is what a Discovered event found.
+type DiscoveryKind string
+
+const (
+	FoundTrap       DiscoveryKind = "trap"
+	FoundSecretDoor DiscoveryKind = "secret door"
+)
+
 // Discovered: a hidden trap or secret door was found, by passive Perception or
 // by a Search.
 type Discovered struct {
 	Finder  ID
-	Kind    string // "trap" or "secret door"
+	Kind    DiscoveryKind
 	ID      ID
 	Pos     board.Pos
 	Passive bool
@@ -194,7 +209,7 @@ func (s *Session) targetable(c, t *creature) bool {
 // something at p.
 func (s *Session) passivePerception(c *creature, p board.Pos) int {
 	score := 10 + c.PerceptionMod - c.d20Penalty()
-	if s.effectiveLight(c, p) == Dim || c.checkDisadvantage() {
+	if s.dimFor(c, p) || c.checkDisadvantage() {
 		score -= 5
 	}
 	return score
@@ -224,14 +239,14 @@ func (s *Session) discover(c *creature, passive bool, found func(p board.Pos, dc
 		t := s.traps[id]
 		if !t.found && s.seesPos(c, t.Pos) && found(t.Pos, t.DC) {
 			t.found = true
-			out = append(out, Discovered{Finder: c.ID, Kind: "trap", ID: id, Pos: t.Pos, Passive: passive})
+			out = append(out, Discovered{Finder: c.ID, Kind: FoundTrap, ID: id, Pos: t.Pos, Passive: passive})
 		}
 	}
 	for _, id := range s.objectOrder {
 		o := s.objects[id]
 		if o.Secret && !o.found && s.seesPos(c, o.Pos) && found(o.Pos, o.DC) {
 			o.found = true
-			out = append(out, Discovered{Finder: c.ID, Kind: "secret door", ID: id, Pos: o.Pos, Passive: passive})
+			out = append(out, Discovered{Finder: c.ID, Kind: FoundSecretDoor, ID: id, Pos: o.Pos, Passive: passive})
 		}
 	}
 	return out
@@ -256,14 +271,9 @@ func (s *Session) ViewFor(viewer ID) View {
 			v.Creatures[id] = full.Creatures[id]
 		}
 	}
+	// A found secret door stays known even out of sight.
 	for id, o := range s.objects {
-		if o.known() && s.seesPos(c, o.Pos) {
-			v.Objects[id] = full.Objects[id]
-		}
-	}
-	// Objects and traps once found stay known even out of sight.
-	for id, o := range s.objects {
-		if o.Secret && o.found {
+		if o.known() && (o.Secret || s.seesPos(c, o.Pos)) {
 			v.Objects[id] = full.Objects[id]
 		}
 	}
@@ -283,72 +293,176 @@ func (s *Session) ViewFor(viewer ID) View {
 	return v
 }
 
-// EventsFor filters events for a Player Character's client: an event about a
-// creature the viewer does not perceive is dropped, and discoveries are only
-// sent to the party that made them.
+// EventsFor filters events for a Player Character's client. It is default-deny:
+// an event is sent only when every creature it names is perceived by the viewer
+// (so an unlisted event type is dropped), a source or target the viewer does
+// not perceive is cleared where the event stays useful, and an event about an
+// undiscovered secret door is dropped. Discoveries go to everyone on the
+// finder's team, since what a Player Character finds is known to the Party.
+// Visibility is judged against the session's current state, not the state when
+// the event happened, so filter the events a Submit returns before submitting
+// again.
 func (s *Session) EventsFor(viewer ID, evs []Event) []Event {
 	c, ok := s.creatures[viewer]
 	if !ok {
 		return nil
 	}
-	seen := func(id ID) bool {
-		o, ok := s.creatures[id]
-		return !ok || s.sees(c, o)
+	seen := func(ids ...ID) bool {
+		for _, id := range ids {
+			if o, ok := s.creatures[id]; !ok || !s.sees(c, o) {
+				return false
+			}
+		}
+		return true
+	}
+	// unseen clears an optional creature reference the viewer does not perceive.
+	unseen := func(id ID) ID {
+		if id != "" && !seen(id) {
+			return ""
+		}
+		return id
 	}
 	var out []Event
 	for _, orig := range evs {
-		keep, ev := true, orig
 		switch e := orig.(type) {
 		case Discovered:
-			keep = seen(e.Finder)
-		case Moved:
-			keep = seen(e.Creature)
-		case Hid:
-			keep = seen(e.Creature)
-		case InitiativeRolled:
-			keep = seen(e.Creature)
-		case TurnStarted:
-			keep = seen(e.Creature)
-		case TurnEnded:
-			keep = seen(e.Creature)
+			if f, ok := s.creatures[e.Finder]; ok && f.Team == c.Team {
+				out = append(out, e)
+			}
 		case Searched:
-			keep = seen(e.Creature)
-			e.Found = slices.DeleteFunc(slices.Clone(e.Found), func(id ID) bool { return !seen(id) })
-			ev = e
-		case AttackRolled:
-			keep = seen(e.Attacker) || seen(e.Target)
-		case DamageDealt:
-			keep = seen(e.Target)
-		case CreatureDowned:
-			keep = seen(e.Creature)
-		case Dashed:
-			keep = seen(e.Creature)
-		case Disengaged:
-			keep = seen(e.Creature)
-		case Dodged:
-			keep = seen(e.Creature)
-		case Helped:
-			keep = seen(e.Creature)
-		case HelpedCheck:
-			keep = seen(e.Creature)
-		case Readied:
-			keep = seen(e.Creature)
-		case ReadyTriggered:
-			keep = seen(e.Creature)
-		case ReadyFizzled:
-			keep = seen(e.Creature)
-		case ReadyLapsed:
-			keep = seen(e.Creature)
-		case OpportunityAttackMade:
-			keep = seen(e.Attacker) || seen(e.Target)
-		case CreatureLeft:
-			keep = seen(e.Creature)
+			if seen(e.Creature) {
+				e.Found = slices.DeleteFunc(slices.Clone(e.Found), func(id ID) bool { return !seen(id) })
+				out = append(out, e)
+			}
+		case ConditionApplied:
+			if seen(e.Creature) {
+				e.Source = unseen(e.Source)
+				out = append(out, e)
+			}
+		case ReactionPrompted:
+			// The prompt is for its creature's owner; the target it names is
+			// cleared when that creature does not perceive it.
+			if e.Creature == viewer || seen(e.Creature, e.Target) {
+				if e.Creature == viewer {
+					e.Target = unseen(e.Target)
+				}
+				out = append(out, e)
+			}
 		case ObjectUsed:
-			keep = seen(e.Creature)
-		}
-		if keep {
-			out = append(out, ev)
+			if o, ok := s.objects[e.Object]; ok && o.known() && seen(e.Creature) {
+				out = append(out, e)
+			}
+		case ObjectChanged:
+			if o, ok := s.objects[e.Object]; ok && o.known() {
+				out = append(out, e)
+			}
+		case CombatEnded:
+			out = append(out, e)
+		default:
+			if ids, ok := involved(orig); ok && seen(ids...) {
+				out = append(out, orig)
+			}
 		}
 	}
 	return out
+}
+
+// involved lists the creatures an event names; ok is false for event types
+// EventsFor does not know, which are never sent.
+func involved(e Event) (ids []ID, ok bool) {
+	switch e := e.(type) {
+	case InitiativeRolled:
+		return []ID{e.Creature}, true
+	case TurnStarted:
+		return []ID{e.Creature}, true
+	case TurnEnded:
+		return []ID{e.Creature}, true
+	case Moved:
+		return []ID{e.Creature}, true
+	case AttackRolled:
+		return []ID{e.Attacker, e.Target}, true
+	case DamageDealt:
+		return []ID{e.Target}, true
+	case CreatureDowned:
+		return []ID{e.Creature}, true
+	case Dashed:
+		return []ID{e.Creature}, true
+	case Disengaged:
+		return []ID{e.Creature}, true
+	case OpportunityAttackMade:
+		return []ID{e.Attacker, e.Target}, true
+	case CreatureLeft:
+		return []ID{e.Creature}, true
+	case Dodged:
+		return []ID{e.Creature}, true
+	case Helped:
+		return []ID{e.Creature, e.Target}, true
+	case HelpedCheck:
+		return []ID{e.Creature, e.Ally}, true
+	case Hid:
+		return []ID{e.Creature}, true
+	case Revealed:
+		return []ID{e.Creature}, true
+	case Readied:
+		return []ID{e.Creature}, true
+	case ReadyTriggered:
+		return []ID{e.Creature, e.Cause}, true
+	case ReadyFizzled:
+		return []ID{e.Creature}, true
+	case ReadyLapsed:
+		return []ID{e.Creature}, true
+	case ReactionDeclined:
+		return []ID{e.Creature}, true
+	case ReactionTimedOut:
+		return []ID{e.Creature}, true
+	case ConditionRemoved:
+		return []ID{e.Creature}, true
+	case ConditionResisted:
+		return []ID{e.Creature}, true
+	case SaveRolled:
+		return []ID{e.Creature}, true
+	case CheckRolled:
+		return []ID{e.Creature}, true
+	case DeathSaveRolled:
+		return []ID{e.Creature}, true
+	case DeathSaveFailed:
+		return []ID{e.Creature}, true
+	case CreatureStabilized:
+		return []ID{e.Creature}, true
+	case CreatureDied:
+		return []ID{e.Creature}, true
+	case HealingReceived:
+		return []ID{e.Creature}, true
+	case StoodUp:
+		return []ID{e.Creature}, true
+	}
+	return nil, false
+}
+
+// dimFor reports whether p is Dim Light (Lightly Obscured) for c.
+func (s *Session) dimFor(c *creature, p board.Pos) bool { return s.effectiveLight(c, p) == Dim }
+
+// searchTargets reports whether the undiscovered traps and secret doors c sees
+// lie on Dim Light squares, and whether any lie elsewhere.
+func (s *Session) searchTargets(c *creature) (dim, lit bool) {
+	check := func(p board.Pos) {
+		if s.seesPos(c, p) {
+			if s.dimFor(c, p) {
+				dim = true
+			} else {
+				lit = true
+			}
+		}
+	}
+	for _, id := range s.trapOrder {
+		if t := s.traps[id]; !t.found {
+			check(t.Pos)
+		}
+	}
+	for _, id := range s.objectOrder {
+		if o := s.objects[id]; o.Secret && !o.found {
+			check(o.Pos)
+		}
+	}
+	return dim, lit
 }

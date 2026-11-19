@@ -522,8 +522,6 @@ func (s *Session) attack(in Attack) ([]Event, error) {
 		return nil, reject(InvalidTarget, "%s is not hostile", t.ID)
 	case t.out():
 		return nil, reject(InvalidTarget, "%s is down or gone", t.ID)
-	case t.hidden():
-		return nil, reject(InvalidTarget, "%s can't be seen", t.ID)
 	case !s.targetable(c, t):
 		return nil, reject(InvalidTarget, "%s can't be seen", t.ID)
 	case !inReach(c, t.Pos):

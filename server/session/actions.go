@@ -61,7 +61,7 @@ func (s *Session) reveal(c *creature, reason string) []Event {
 // rollCheck rolls an ability check for c, spending a Help it was given for
 // skill. Poisoned and Frightened give Disadvantage; Exhaustion lowers the total
 // through the caller's modifier (see d20Penalty).
-func (s *Session) rollCheck(c *creature, skill string) (d20 int, mode RollMode) {
+func (s *Session) rollCheck(c *creature, skill string, extraDisadvantage bool) (d20 int, mode RollMode) {
 	adv := false
 	for i, h := range s.helpChecks {
 		if h.ally == c.ID && h.skill == skill {
@@ -70,7 +70,7 @@ func (s *Session) rollCheck(c *creature, skill string) (d20 int, mode RollMode) 
 			break
 		}
 	}
-	return s.rollD20(adv, c.checkDisadvantage())
+	return s.rollD20(adv, c.checkDisadvantage() || extraDisadvantage)
 }
 
 // consumeHelpAttack spends one Help given to c's team against t, if any.
@@ -142,7 +142,7 @@ func (s *Session) standardAction(in Intent) ([]Event, error) {
 		if s.board.At(c.Pos) != board.Obscured {
 			return nil, reject(NoSuchOption, "%s is not Heavily Obscured, so it can't Hide", c.ID)
 		}
-		d20, mode := s.rollCheck(c, Stealth)
+		d20, mode := s.rollCheck(c, Stealth, false)
 		mod := c.StealthMod - c.d20Penalty()
 		total := d20 + mod
 		ok := total >= hideDC
@@ -157,19 +157,40 @@ func (s *Session) standardAction(in Intent) ([]Event, error) {
 			out = append(out, ev...)
 		}
 	case Search:
-		d20, mode := s.rollCheck(c, Perception)
-		mod := c.PerceptionMod - c.d20Penalty()
-		total := d20 + mod
-		var found []ID
-		for _, id := range s.order {
-			if o := s.creatures[id]; o.Team != c.Team && o.hidden() && total >= o.hideDC {
-				out = append(out, s.reveal(o, "found by Search")...)
-				found = append(found, id)
+		// One Wisdom (Perception) check finds hidden creatures and the traps and
+		// secret doors in sight on lit squares. What lies on a Dim Light square
+		// is Lightly Obscured, so it takes its own check with Disadvantage.
+		dim, lit := s.searchTargets(c)
+		ambushers := slices.ContainsFunc(s.order, func(id ID) bool {
+			o := s.creatures[id]
+			return o.Team != c.Team && o.hidden()
+		})
+		search := func(dis, dimSquares, creatures bool) {
+			d20, mode := s.rollCheck(c, Perception, dis)
+			mod := c.PerceptionMod - c.d20Penalty()
+			total := d20 + mod
+			var found []ID
+			var rest []Event
+			if creatures {
+				for _, id := range s.order {
+					if o := s.creatures[id]; o.Team != c.Team && o.hidden() && total >= o.hideDC {
+						rest = append(rest, s.reveal(o, "found by Search")...)
+						found = append(found, id)
+					}
+				}
 			}
+			rest = append(rest, s.discover(c, false, func(p board.Pos, dc int) bool {
+				return s.dimFor(c, p) == dimSquares && total >= dc
+			})...)
+			out = append(out, Searched{Creature: c.ID, D20: d20, Modifier: mod, Total: total, Mode: mode, Found: found})
+			out = append(out, rest...)
 		}
-		// The same total also finds the traps and secret doors in sight.
-		out = append(out, s.discover(c, false, func(_ board.Pos, dc int) bool { return total >= dc })...)
-		out = append([]Event{Searched{Creature: c.ID, D20: d20, Modifier: mod, Total: total, Mode: mode, Found: found}}, out...)
+		if lit || ambushers || !dim {
+			search(false, false, true)
+		}
+		if dim {
+			search(true, true, false)
+		}
 	case Utilize:
 		o, ok := s.objects[in.Object]
 		if !ok || !o.known() {

@@ -1,7 +1,9 @@
 package session_test
 
 import (
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/mvgv/dndboard/server/board"
@@ -336,5 +338,80 @@ func TestDiscoveredSecretDoorCanBeUtilized(t *testing.T) {
 	_ = submit(t, s, session.Utilize{Actor: "a", Object: "sd"})
 	if !s.ViewFor("a").Objects["sd"].Open {
 		t.Fatal("the discovered door must open")
+	}
+}
+
+// Hidden information leaks through any event that names it, not just Moved:
+// conditions, healing and a lever that works an undiscovered secret door must
+// stay out of the client-bound events.
+func TestEventsNeverNameHiddenCreaturesOrSecretDoors(t *testing.T) {
+	ambusher := goblin("ambusher", 5, 2)
+	ambusher.HiddenDC = 18
+	s := startView(t, session.Config{
+		Dice:      dice.Fixed(15, 10, 5), // the hidden ambusher rolls initiative with Advantage
+		Creatures: []session.CreatureSpec{pc("a", 1, 1), ambusher},
+		Objects: []session.ObjectSpec{
+			{ID: "secret", Kind: session.Door, Pos: board.Pos{X: 6, Y: 0}, Secret: true, DC: 25},
+			{ID: "lever", Kind: session.Lever, Pos: board.Pos{X: 1, Y: 0}, Controls: "secret"},
+		},
+	})
+	var evs []session.Event
+	apply := func(e session.Effect) {
+		t.Helper()
+		got, err := s.Apply(e)
+		if err != nil {
+			t.Fatalf("%T rejected: %v", e, err)
+		}
+		evs = append(evs, got...)
+	}
+	apply(session.InflictCondition{Target: "ambusher", Condition: session.CondPoisoned})
+	apply(session.InflictDamage{Target: "ambusher", Amount: 3, Type: "fire"})
+	apply(session.Heal{Target: "ambusher", Amount: 2})
+	apply(session.InflictCondition{Target: "a", Condition: session.CondFrightened, Source: "ambusher"})
+	evs = append(evs, submit(t, s, session.Utilize{Actor: "a", Object: "lever"})...)
+
+	if _, ok := find[session.HealingReceived](evs); !ok {
+		t.Fatal("scenario must have produced a HealingReceived to filter")
+	}
+	if _, ok := find[session.ObjectChanged](evs); !ok {
+		t.Fatal("scenario must have produced an ObjectChanged to filter")
+	}
+	got := s.EventsFor("a", evs)
+	for _, e := range got {
+		if text := fmt.Sprintf("%+v", e); strings.Contains(text, "ambusher") || strings.Contains(text, "secret") {
+			t.Fatalf("client-bound event leaks hidden information: %T %s", e, text)
+		}
+	}
+	// What the viewer may know still arrives: its own condition (source
+	// cleared) and the lever it pulled.
+	if c, ok := find[session.ConditionApplied](got); !ok || c.Creature != "a" || c.Source != "" {
+		t.Fatalf("own condition missing or leaking its source: %+v", c)
+	}
+	if _, ok := find[session.ObjectUsed](got); !ok {
+		t.Fatal("the lever the viewer pulled must be reported")
+	}
+}
+
+// "You have Disadvantage on Wisdom (Perception) checks to see something in a
+// Lightly Obscured space": Search rolls with Disadvantage against a trap in Dim
+// Light, where it would otherwise find the trap with the first die.
+func TestSearchHasDisadvantageAgainstTrapsInDimLight(t *testing.T) {
+	a := pc("a", 1, 2)
+	a.PerceptionMod = 1
+	s := startView(t, session.Config{
+		Ambient: session.Dim,
+		// Initiative 15 and 10, then the Search's two dice: Disadvantage keeps the 4.
+		Dice:      dice.Fixed(15, 10, 14, 4),
+		Creatures: []session.CreatureSpec{a, goblin("g", 11, 3)},
+		Traps:     []session.TrapSpec{{ID: "pit", Pos: board.Pos{X: 3, Y: 2}, DC: 10}},
+	})
+	// Passive Perception in Dim Light is 11 - 5 = 6, so the pit is still hidden.
+	evs := submit(t, s, session.Search{Actor: "a"})
+	got := all[session.Searched](evs)
+	if len(got) != 1 || got[0].Mode != session.Disadvantage || got[0].D20 != 4 {
+		t.Fatalf("Searched = %+v, want one roll with Disadvantage keeping the 4", got)
+	}
+	if len(all[session.Discovered](evs)) != 0 {
+		t.Fatal("total 5 must not find a DC 10 trap")
 	}
 }
