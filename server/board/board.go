@@ -99,6 +99,47 @@ func Distance(a, b Pos) int {
 	return max(dx, dy)
 }
 
+// Size is the width and height in squares.
+func (b *Board) Size() (w, h int) { return b.w, b.h }
+
+// With returns a copy of the Board where square p has terrain t.
+func (b *Board) With(p Pos, t Terrain) *Board {
+	c := *b
+	c.cells = append([]Terrain(nil), b.cells...)
+	if b.In(p) {
+		c.cells[p.Y*b.w+p.X] = t
+	}
+	return &c
+}
+
+// Line returns the squares a straight line from a to c passes through, both
+// included, walking the line between square centers (Bresenham).
+func Line(a, c Pos) []Pos {
+	dx, dy := abs(c.X-a.X), abs(c.Y-a.Y)
+	sx, sy := 1, 1
+	if a.X > c.X {
+		sx = -1
+	}
+	if a.Y > c.Y {
+		sy = -1
+	}
+	out := []Pos{a}
+	err := dx - dy
+	for p := a; p != c; {
+		e2 := 2 * err
+		if e2 > -dy {
+			err -= dy
+			p.X += sx
+		}
+		if e2 < dx {
+			err += dx
+			p.Y += sy
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
 func abs(n int) int {
 	if n < 0 {
 		return -n

@@ -38,7 +38,10 @@ type helpCheck struct {
 	skill        string
 }
 
-type object struct{ ObjectSpec }
+type object struct {
+	ObjectSpec
+	found bool // a Secret door that has been discovered
+}
 
 // hidden reports whether the creature is hidden: it has the Invisible condition
 // from a successful Hide action.
@@ -164,10 +167,12 @@ func (s *Session) standardAction(in Intent) ([]Event, error) {
 				found = append(found, id)
 			}
 		}
+		// The same total also finds the traps and secret doors in sight.
+		out = append(out, s.discover(c, false, func(_ board.Pos, dc int) bool { return total >= dc })...)
 		out = append([]Event{Searched{Creature: c.ID, D20: d20, Modifier: mod, Total: total, Mode: mode, Found: found}}, out...)
 	case Utilize:
 		o, ok := s.objects[in.Object]
-		if !ok {
+		if !ok || !o.known() {
 			return nil, reject(InvalidTarget, "no object %q", in.Object)
 		}
 		ev, rej := s.useObject(c, o)
@@ -203,7 +208,7 @@ func (s *Session) validReady(in Ready) *Rejection {
 			return reject(NoSuchOption, "%v is not a square a creature can enter", in.Response.To)
 		}
 	case RespondUtilize:
-		if _, ok := s.objects[in.Response.Object]; !ok {
+		if o, ok := s.objects[in.Response.Object]; !ok || !o.known() {
 			return reject(InvalidTarget, "no object %q", in.Response.Object)
 		}
 	default:
@@ -285,10 +290,17 @@ func (s *Session) placeObjects(specs []ObjectSpec) error {
 			}
 		}
 		wall := s.board.At(sp.Pos) == board.Wall
+		if sp.Secret && (sp.Kind != Door || !wall || sp.Open) {
+			return fmt.Errorf("session: secret door %q must be a closed door set in a wall at %v", sp.ID, sp.Pos)
+		}
 		switch sp.Kind {
 		case Door, Chest:
-			if wall {
+			if wall && !sp.Secret {
 				return fmt.Errorf("session: %s %q is on a wall at %v", sp.Kind, sp.ID, sp.Pos)
+			}
+			if sp.Secret {
+				// Walkable once found; until then its closed state blocks.
+				s.board = s.board.With(sp.Pos, board.Floor)
 			}
 			for _, c := range s.creatures {
 				if c.Pos == sp.Pos && (sp.Kind == Chest || !sp.Open) {
@@ -305,7 +317,7 @@ func (s *Session) placeObjects(specs []ObjectSpec) error {
 		if sp.Controls != "" && sp.Kind != Lever {
 			return fmt.Errorf("session: only a lever controls an object, not %q", sp.ID)
 		}
-		s.objects[sp.ID] = &object{sp}
+		s.objects[sp.ID] = &object{ObjectSpec: sp}
 		s.objectOrder = append(s.objectOrder, sp.ID)
 	}
 	for _, o := range s.objects {
@@ -409,7 +421,7 @@ func (s *Session) standardActionOptions(c *creature, la *LegalActions) {
 	}
 	for _, id := range s.objectOrder {
 		o := s.objects[id]
-		if board.Distance(c.Pos, o.Pos) > 1 {
+		if !o.known() || board.Distance(c.Pos, o.Pos) > 1 {
 			continue
 		}
 		if e := s.utilizeEffect(o); e != "" {

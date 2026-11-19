@@ -104,6 +104,14 @@ _Avoid_: prop, interactable, item
 The Invisible Condition a creature gains by succeeding at the Hide action. It ends when the creature attacks or an enemy finds it with the Search action. Enemies cannot choose a hidden creature as a target.
 _Avoid_: stealthed, concealed
 
+**View**:
+What one Player Character perceives, and the only state sent to its client: the creatures and Board objects it sees (light, Darkvision, line of sight, closed Doors and Blinded decide that), the squares it sees, and the traps and secret doors already discovered. Events are filtered the same way. The server's own State is complete and never leaves the server.
+_Avoid_: fog of war (that is how the client draws it), visible state (for the server's own)
+
+**Hidden information**:
+What no client may receive until the engine confirms it was discovered: undiscovered secret doors and traps, and monsters that are hidden. Passive Perception finds traps and secret doors at or below its value as a Player Character sees them; the Search action rolls a Wisdom (Perception) check that reveals what its total meets.
+_Avoid_: secret (alone), spoiler
+
 **Effect**:
 Something the rules engine applies to a creature outside its own turn's Intents, such as a trap, a spell or a ruling: inflicting or clearing a condition, damage, healing, a saving throw or an ability check. Applied through the game-session seam like an Intent, and answered with events. The declarative effects of spells and class features (#8) compile down to these.
 _Avoid_: trigger, hit
