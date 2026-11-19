@@ -150,7 +150,7 @@ func TestParseRejectsInvalidEffects(t *testing.T) {
 
 func TestParseRejectsInvalidWeaponTraits(t *testing.T) {
 	for in, want := range map[string]string{
-		strings.Replace(weapon, `"Bludgeoning"`, `"Bludgeon"`, 1):                       `unknown damage type "Bludgeon"`,
+		strings.Replace(weapon, `"Bludgeoning"`, `"Bludgeon"`, 1):                         `unknown damage type "Bludgeon"`,
 		strings.Replace(weapon, `"reach_ft":5`, `"reach_ft":5,"properties":["sharp"]`, 1): `unknown weapon property "sharp"`,
 	} {
 		_, err := content.Parse([]byte(doc(in, "")))
