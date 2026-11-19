@@ -36,12 +36,19 @@ type creature struct {
 	hp           int
 	gone         bool // fled or surrendered: no longer in the combat
 	reactionUsed bool // regained at the start of the creature's own turn
+
+	dead                 bool
+	stable               bool // at 0 Hit Points, no Death Saving Throws
+	deathSucc, deathFail int
+	exhaustion           int
+	conds                map[Condition]ID // conditions the creature itself carries, with their source
 }
 
 func (c *creature) down() bool { return c.hp <= 0 }
 
-// out reports whether the creature no longer takes part in the combat.
-func (c *creature) out() bool { return c.down() || c.gone }
+// out reports whether the creature no longer takes part in the combat: dead or
+// gone. A character at 0 Hit Points is still in it, making Death Saving Throws.
+func (c *creature) out() bool { return c.dead || c.gone }
 
 // Session is one combat. It is not safe for concurrent use.
 type Session struct {
@@ -104,7 +111,15 @@ func New(cfg Config) (*Session, error) {
 				return nil, fmt.Errorf("session: %q and %q share %v", spec.ID, o.ID, spec.Pos)
 			}
 		}
-		s.creatures[spec.ID] = &creature{CreatureSpec: spec, hp: spec.MaxHP}
+		c := &creature{CreatureSpec: spec, hp: spec.MaxHP, conds: map[Condition]ID{}}
+		for _, k := range spec.Conditions {
+			if k == CondExhaustion {
+				c.exhaustion++
+			} else {
+				c.conds[k] = ""
+			}
+		}
+		s.creatures[spec.ID] = c
 		s.order = append(s.order, spec.ID)
 		teams[spec.Team] = true
 	}
@@ -131,11 +146,11 @@ func (s *Session) rollInitiative() {
 		c := s.creatures[id]
 		r, shared := groups[c.Group]
 		if c.Group == "" || !shared {
-			d := s.dice.Roll(20)
-			if c.Surprised {
-				d = min(d, s.dice.Roll(20))
-			}
-			r = result{d, d + c.InitiativeMod}
+			// Initiative is a Dexterity check: Disadvantage if surprised or
+			// Incapacitated (SRD "Rules Glossary", Incapacitated) or Poisoned or
+			// Frightened; Advantage if Invisible; Exhaustion reduces the roll.
+			d, _ := s.rollD20(c.has(CondInvisible), c.Surprised || c.incapacitated() || c.checkDisadvantage())
+			r = result{d, d + c.InitiativeMod - c.d20Penalty()}
 			if c.Group != "" {
 				groups[c.Group] = r
 			}
@@ -154,6 +169,15 @@ func (s *Session) startTurn(out *[]Event) {
 	s.acted, s.bonused, s.disengage = false, false, false
 	c.reactionUsed = false
 	*out = append(*out, TurnStarted{Creature: c.ID, Round: s.round})
+	if c.dying() {
+		*out = append(*out, s.deathSave(c)...)
+		*out = s.settle(*out)
+	}
+	// A creature at 0 Hit Points can do nothing on its turn: pass it unless it
+	// just regained Hit Points or the combat is over.
+	if c.down() && !s.over {
+		*out = append(*out, s.endTurn()...)
+	}
 }
 
 // Log returns every event since the session started.
@@ -187,8 +211,8 @@ func (s *Session) Submit(in Intent) ([]Event, error) {
 		out = ev
 	case Dash:
 		ev, err := s.takeAction(func(c *creature) []Event {
-			s.dashedFt += c.SpeedFt
-			return []Event{Dashed{Creature: c.ID, ExtraFt: c.SpeedFt}}
+			s.dashedFt += c.speed()
+			return []Event{Dashed{Creature: c.ID, ExtraFt: c.speed()}}
 		})
 		if err != nil {
 			return nil, err
@@ -203,9 +227,23 @@ func (s *Session) Submit(in Intent) ([]Event, error) {
 			return nil, err
 		}
 		out = ev
+	case Stand:
+		ev, err := s.stand(s.active())
+		if err != nil {
+			return nil, err
+		}
+		out = ev
+	case Stabilize:
+		ev, err := s.stabilizeAttempt(in)
+		if err != nil {
+			return nil, err
+		}
+		out = ev
 	case NimbleEscape:
 		c := s.active()
 		switch {
+		case c.incapacitated():
+			return nil, reject(Incapacitated, "%s is Incapacitated", c.ID)
 		case !c.NimbleEscape:
 			return nil, reject(NoSuchOption, "%s has no Nimble Escape", c.ID)
 		case s.bonused:
@@ -227,7 +265,7 @@ func (s *Session) Submit(in Intent) ([]Event, error) {
 func (s *Session) move(in Move) ([]Event, error) {
 	c := s.active()
 	if _, ok := s.reachable(c)[in.To]; !ok {
-		return nil, reject(Unreachable, "%v is not reachable with %d ft of movement left", in.To, c.SpeedFt+s.dashedFt-s.movedFt)
+		return nil, reject(Unreachable, "%v is not reachable with %d ft of movement left", in.To, s.movementLeft(c))
 	}
 	m := &pendingMove{path: s.pathTo(c, in.To), startPos: c.Pos}
 	return s.runMove(m), nil
@@ -240,7 +278,7 @@ func (s *Session) reactors(c *creature, a, b board.Pos) []ID {
 	var ids []ID
 	for _, id := range s.order {
 		o := s.creatures[id]
-		if o.Team == c.Team || o.out() || o.reactionUsed || !inReach(o, a) || inReach(o, b) {
+		if o.Team == c.Team || o.out() || o.reactionUsed || o.incapacitated() || !inReach(o, a) || inReach(o, b) {
 			continue
 		}
 		ids = append(ids, id)
@@ -268,7 +306,7 @@ func (s *Session) runMove(m *pendingMove) []Event {
 		}
 		for len(m.cand) > 0 {
 			o := s.creatures[m.cand[0]]
-			if o.out() || o.reactionUsed {
+			if o.out() || o.reactionUsed || o.incapacitated() {
 				m.cand = m.cand[1:]
 				continue
 			}
@@ -370,6 +408,9 @@ func (s *Session) resolvePrompt(m *pendingMove, react, timedOut bool) []Event {
 // takeAction spends the action on one of the standard actions.
 func (s *Session) takeAction(do func(*creature) []Event) ([]Event, error) {
 	c := s.active()
+	if c.incapacitated() {
+		return nil, reject(Incapacitated, "%s is Incapacitated and can't take actions", c.ID)
+	}
 	if s.acted {
 		return nil, reject(ActionUsed, "%s already took an action this turn", c.ID)
 	}
@@ -379,6 +420,9 @@ func (s *Session) takeAction(do func(*creature) []Event) ([]Event, error) {
 
 // finishIfOver ends the combat when one side is defeated or gone.
 func (s *Session) finishIfOver(out []Event) []Event {
+	if s.over {
+		return out
+	}
 	if w, done := s.victor(); done {
 		s.over, s.winner = true, w
 		out = append(out, CombatEnded{Winner: w})
@@ -400,11 +444,17 @@ func (s *Session) leave() []Event {
 
 func (s *Session) attack(in Attack) ([]Event, error) {
 	c := s.active()
+	if c.incapacitated() {
+		return nil, reject(Incapacitated, "%s is Incapacitated and can't take actions", c.ID)
+	}
 	if s.acted {
 		return nil, reject(ActionUsed, "%s already took an action this turn", c.ID)
 	}
 	t, ok := s.creatures[in.Target]
 	switch {
+	case ok && c.has(CondCharmed) && c.conds[CondCharmed] == t.ID:
+		// SRD "Rules Glossary", Charmed: can't attack the charmer.
+		return nil, reject(InvalidTarget, "%s is charmed by %s and can't attack them", c.ID, t.ID)
 	case !ok:
 		return nil, reject(InvalidTarget, "no creature %q", in.Target)
 	case t.Team == c.Team:
@@ -424,13 +474,17 @@ func (s *Session) resolveAttack(c, t *creature) []Event {
 	// Attack roll: hits if the total equals or exceeds AC; a natural 20 hits
 	// as a Critical Hit, a natural 1 misses (SRD "Playing the Game", Attack Rolls).
 	a := c.Attack
-	d20 := s.dice.Roll(20)
-	total := d20 + a.ToHit
-	crit := d20 == 20
-	hit := crit || (d20 != 1 && total >= t.AC)
+	adv, dis := attackMode(c, t)
+	d20, mode := s.rollD20(adv, dis)
+	mod := a.ToHit - c.d20Penalty()
+	total := d20 + mod
+	hit := d20 == 20 || (d20 != 1 && total >= t.AC)
+	// A Critical Hit is a natural 20, or any hit on a Paralyzed or Unconscious
+	// target within 5 feet.
+	crit := hit && (d20 == 20 || autoCrit(c, t))
 	out := []Event{AttackRolled{
-		Attacker: c.ID, Target: t.ID, Weapon: a.Name, D20: d20, Modifier: a.ToHit,
-		Total: total, AC: t.AC, Hit: hit, Critical: crit,
+		Attacker: c.ID, Target: t.ID, Weapon: a.Name, D20: d20, Modifier: mod,
+		Total: total, AC: t.AC, Hit: hit, Critical: crit, Mode: mode,
 	}}
 	if !hit {
 		return out
@@ -448,20 +502,23 @@ func (s *Session) resolveAttack(c, t *creature) []Event {
 		rolls[i] = s.dice.Roll(a.DiceSides)
 		sum += rolls[i]
 	}
-	amount := max(sum, 0)
-	t.hp = max(t.hp-amount, 0)
-	out = append(out, DamageDealt{Target: t.ID, Rolls: rolls, Bonus: a.DamageBonus, Amount: amount, Type: a.DamageType, HPAfter: t.hp})
-	if t.down() {
-		out = append(out, CreatureDowned{Creature: t.ID})
-		out = s.finishIfOver(out)
+	return append(out, s.applyDamage(t, DamageDealt{
+		Target: t.ID, Rolls: rolls, Bonus: a.DamageBonus, Raw: max(sum, 0), Type: a.DamageType,
+	}, crit)...)
+}
+
+// movementLeft is the movement the creature has left this turn.
+func (s *Session) movementLeft(c *creature) int {
+	if c.speed() == 0 {
+		return 0
 	}
-	return out
+	return max(c.speed()+s.dashedFt-s.movedFt, 0)
 }
 
 func (s *Session) victor() (Team, bool) {
 	var standing Team
 	for _, c := range s.creatures {
-		if c.out() {
+		if c.defeated() {
 			continue
 		}
 		if standing != "" && standing != c.Team {
@@ -520,7 +577,18 @@ func (s *Session) pathTo(c *creature, to board.Pos) []board.Pos {
 }
 
 func (s *Session) search(c *creature) (map[board.Pos]int, map[board.Pos]board.Pos) {
-	budget := (c.SpeedFt + s.dashedFt - s.movedFt) / board.SquareFeet
+	budget := s.movementLeft(c) / board.SquareFeet
+	// Prone creatures crawl: each foot costs 1 extra foot (SRD "Rules Glossary",
+	// Crawling). A Frightened creature can't willingly move closer to the source
+	// of its fear.
+	crawl := 1
+	if c.has(CondProne) {
+		crawl = 2
+	}
+	var fear *creature
+	if src := s.creatures[c.conds[CondFrightened]]; c.has(CondFrightened) && src != nil && !src.out() {
+		fear = src
+	}
 	occupant := map[board.Pos]*creature{}
 	for _, o := range s.creatures {
 		if o != c && !o.out() {
@@ -545,7 +613,10 @@ func (s *Session) search(c *creature) (map[board.Pos]int, map[board.Pos]board.Po
 				if o := occupant[next]; o != nil && o.Team != c.Team {
 					continue
 				}
-				nc := cur.cost + step
+				if fear != nil && board.Distance(next, fear.Pos) < board.Distance(cur.pos, fear.Pos) {
+					continue
+				}
+				nc := cur.cost + step*crawl
 				if nc > budget {
 					continue
 				}
@@ -574,7 +645,9 @@ func (s *Session) State() State {
 	for id, c := range s.creatures {
 		st.Creatures[id] = CreatureState{Name: c.Name, Team: c.Team, Pos: c.Pos,
 			HP: c.hp, MaxHP: c.MaxHP, AC: c.AC, Down: c.down(),
-			Gone: c.gone, ReactionAvailable: !c.out() && !c.reactionUsed}
+			Gone: c.gone, ReactionAvailable: !c.out() && !c.reactionUsed && !c.incapacitated(),
+			Dead: c.dead, Stable: c.stable, DeathSaveSuccesses: c.deathSucc, DeathSaveFailures: c.deathFail,
+			Conditions: c.conditions(), ExhaustionLevel: c.exhaustion}
 	}
 	if m := s.pending; m != nil {
 		st.Pending = &PendingReaction{Creature: m.asked, Target: s.active().ID, Remaining: s.timeout - m.waited}
@@ -590,21 +663,33 @@ func (s *Session) LegalActions() LegalActions {
 		return la
 	}
 	la.EndTurn, la.Leave = true, true
-	la.MovementLeftFt = c.SpeedFt + s.dashedFt - s.movedFt
-	la.Action, la.Reaction = !s.acted, !c.reactionUsed
-	la.Dash, la.Disengage = !s.acted, !s.acted
-	la.NimbleEscape = c.NimbleEscape && !s.bonused
+	la.MovementLeftFt = s.movementLeft(c)
+	// Incapacitated: no action, Bonus Action or Reaction (SRD "Rules Glossary").
+	can := !c.incapacitated()
+	la.Action, la.Reaction = can && !s.acted, can && !c.reactionUsed
+	la.Dash, la.Disengage = la.Action, la.Action
+	la.NimbleEscape = can && c.NimbleEscape && !s.bonused
 	la.BonusAction = la.NimbleEscape // the only Bonus Action modeled so far
+	if c.own(CondProne) && c.speed() > 0 && c.speed()/2 <= la.MovementLeftFt {
+		la.Stand = true
+	}
+	if la.Action {
+		for _, id := range s.order {
+			if t := s.creatures[id]; t != c && t.dying() && board.Distance(c.Pos, t.Pos)*board.SquareFeet <= 5 {
+				la.Stabilize = append(la.Stabilize, id)
+			}
+		}
+	}
 	for p, cost := range s.reachable(c) {
 		la.Moves = append(la.Moves, MoveOption{To: p, CostFt: cost})
 	}
 	slices.SortFunc(la.Moves, func(a, b MoveOption) int {
 		return cmp.Or(cmp.Compare(a.CostFt, b.CostFt), cmp.Compare(a.To.Y, b.To.Y), cmp.Compare(a.To.X, b.To.X))
 	})
-	if !s.acted {
+	if la.Action {
 		for _, id := range s.order {
 			t := s.creatures[id]
-			if t.Team != c.Team && !t.out() && inReach(c, t.Pos) {
+			if t.Team != c.Team && !t.out() && inReach(c, t.Pos) && !(c.has(CondCharmed) && c.conds[CondCharmed] == id) {
 				la.Attacks = append(la.Attacks, AttackOption{Target: id, Weapon: c.Attack.Name})
 			}
 		}

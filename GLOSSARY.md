@@ -88,6 +88,18 @@ _Avoid_: turn order (as the rule name)
 What a creature may spend on its turn: its movement (splittable around anything else), one action, one Bonus Action, and one Reaction that is regained at the start of its own turn.
 _Avoid_: AP, action points
 
+**Effect**:
+Something the rules engine applies to a creature outside its own turn's Intents, such as a trap, a spell or a ruling: inflicting or clearing a condition, damage, healing, a saving throw or an ability check. Applied through the game-session seam like an Intent, and answered with events. The declarative effects of spells and class features (#8) compile down to these.
+_Avoid_: trigger, hit
+
+**Condition**:
+One of the 15 2024 states (Blinded to Unconscious) that changes a creature's rolls, Speed or actions until it ends. Some imply others (Unconscious includes Incapacitated and Prone). Exhaustion is cumulative, by level.
+_Avoid_: status, debuff, status effect
+
+**Dying**:
+A Player Character at 0 Hit Points that is not Stable: Unconscious, making a Death Saving Throw at the start of each of its turns and suffering a failure for each hit it takes. Monsters skip this and die at 0 Hit Points. Stable creatures stay at 0 Hit Points without rolling.
+_Avoid_: bleeding out, downed (as the rule name)
+
 **Reaction Prompt**:
 The pause in which the game asks a Player Character's owner whether it uses its Reaction (today: an Opportunity Attack as a hostile creature leaves its reach). The game waits until the owner answers or the Campaign's reaction timeout passes, and a timeout means no reaction.
 _Avoid_: popup, confirmation
