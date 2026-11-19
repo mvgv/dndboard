@@ -87,3 +87,13 @@ _Avoid_: turn order (as the rule name)
 **Action Economy**:
 What a creature may spend on its turn: its movement (splittable around anything else), one action, one Bonus Action, and one Reaction that is regained at the start of its own turn.
 _Avoid_: AP, action points
+
+### Content format
+
+**Entry**:
+One piece of Compendium or Adventure data in the content format, such as a weapon or a stat block. Entries are pure data, validated against the schema, and reference each other by ID.
+_Avoid_: record, row, asset
+
+**Review status**:
+Whether an Entry is `draft` or `approved`. Only approved Entries load into the game; an approved Entry may only reference approved Entries.
+_Avoid_: state, flag, verified

@@ -1,0 +1,10 @@
+[Unit]
+Description=dndboard conductor: merge passing ticket PRs and start the next tickets
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/workspace/dndboard
+Environment=PATH=%h/.local/bin:%h/go/bin:/snap/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/workspace/dndboard/scripts/conductor.sh
+# Keep the tmux server and the ticket sessions it starts alive after this run exits.
+KillMode=process

@@ -1,48 +1,64 @@
-// Package srd holds hand-written SRD 5.2 creatures until the Forge produces
-// the Compendium (build step 3). Each value cites the SRD entry it encodes.
+// Package srd builds session creatures from the SRD 5.2 content loaded through
+// the content format (content/srd).
 package srd
 
-import "github.com/mvgv/dndboard/server/session"
+import (
+	"fmt"
+	"sync"
 
-// Fighter is a level 1 Fighter (SRD 5.2 "Classes", Fighter).
-//
-//   - Str 16 (+3), Dex 12 (+1), Con 14 (+2); Proficiency Bonus +2 at level 1.
-//   - Hit Points: D10 per Fighter level, so 10 + Con modifier = 12 at level 1.
-//   - Chain Mail ("Equipment", Armor table): AC 16.
-//   - Longsword ("Equipment", Martial Melee Weapons): 1d8 Slashing. Fighters
-//     are proficient with Martial weapons; melee uses Strength ("Playing the
-//     Game", Attack Roll Abilities): attack +3 +2 = +5, damage 1d8 + 3.
-//   - Speed 30 ft.
-func Fighter() session.CreatureSpec {
-	return session.CreatureSpec{
-		Name:          "Fighter",
-		Team:          "party",
-		AC:            16,
-		MaxHP:         12,
-		SpeedFt:       30,
-		InitiativeMod: 1,
-		Attack: session.MeleeAttack{
-			Name: "Longsword", ToHit: 5, DiceCount: 1, DiceSides: 8,
-			DamageBonus: 3, DamageType: "Slashing", ReachFt: 5,
-		},
-	}
+	"github.com/mvgv/dndboard/content"
+	contentsrd "github.com/mvgv/dndboard/content/srd"
+	"github.com/mvgv/dndboard/server/session"
+)
+
+// Fighter is the level 1 Fighter stat block (id "fighter-1"), on the party team.
+func Fighter() session.CreatureSpec { return mustCreature("fighter-1", "party") }
+
+// GoblinWarrior is the SRD Goblin Warrior stat block, on the monsters team. Its
+// Bonus Action, Nimble Escape (SRD 5.2 "Monsters", Goblin Warrior), is set here
+// because the content format does not carry traits yet.
+func GoblinWarrior() session.CreatureSpec {
+	g := mustCreature("goblin-warrior", "monsters")
+	g.NimbleEscape = true // Disengage; Hide is not modeled yet
+	return g
 }
 
-// GoblinWarrior is the SRD 5.2 "Monsters" Goblin Warrior: AC 15, HP 10,
-// Speed 30 ft., Initiative +2, Scimitar: Melee Attack Roll +4, reach 5 ft.,
-// Hit: 5 (1d6 + 2) Slashing damage. Bonus Action: Nimble Escape (Disengage or Hide).
-func GoblinWarrior() session.CreatureSpec {
-	return session.CreatureSpec{
-		Name:          "Goblin Warrior",
-		Team:          "monsters",
-		AC:            15,
-		MaxHP:         10,
-		SpeedFt:       30,
-		InitiativeMod: 2,
-		NimbleEscape:  true, // Bonus Action: Disengage (Hide is not modeled yet)
-		Attack: session.MeleeAttack{
-			Name: "Scimitar", ToHit: 4, DiceCount: 1, DiceSides: 6,
-			DamageBonus: 2, DamageType: "Slashing", ReachFt: 5,
-		},
+// creature builds a CreatureSpec from an approved stat block and its weapon.
+func creature(c *content.Compendium, statBlockID string, team session.Team) (session.CreatureSpec, error) {
+	sb, ok := c.StatBlock(statBlockID)
+	if !ok {
+		return session.CreatureSpec{}, fmt.Errorf("srd: no approved stat block %q", statBlockID)
 	}
+	w, ok := c.Weapon(sb.Attack.Weapon)
+	if !ok {
+		return session.CreatureSpec{}, fmt.Errorf("srd: no approved weapon %q", sb.Attack.Weapon)
+	}
+	return session.CreatureSpec{
+		Name:          sb.Name,
+		Team:          team,
+		AC:            sb.AC,
+		MaxHP:         sb.MaxHP,
+		SpeedFt:       sb.SpeedFt,
+		InitiativeMod: sb.InitiativeMod,
+		Attack: session.MeleeAttack{
+			Name: w.Name, ToHit: sb.Attack.ToHit,
+			DiceCount: w.Damage.DiceCount, DiceSides: w.Damage.DiceSides,
+			DamageBonus: sb.Attack.DamageBonus, DamageType: w.Damage.Type,
+			ReachFt: w.ReachFt,
+		},
+	}, nil
+}
+
+var compendium = sync.OnceValues(contentsrd.Load)
+
+func mustCreature(id string, team session.Team) session.CreatureSpec {
+	c, err := compendium()
+	if err != nil {
+		panic(err)
+	}
+	spec, err := creature(c, id, team)
+	if err != nil {
+		panic(err)
+	}
+	return spec
 }

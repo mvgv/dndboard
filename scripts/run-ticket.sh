@@ -2,36 +2,42 @@
 # Run one GitHub issue unattended with Claude Code, in its own git worktree.
 #
 # Usage:
-#   scripts/run-ticket.sh <issue> [--model sonnet|opus] [--detach]
+#   scripts/run-ticket.sh <issue> [--model sonnet|opus] [--detach] [--feedback-file <path>]
 #
-#   --detach   start in a new window of the tmux session "tickets" and return
-#   --model    Claude model alias (default: sonnet)
+#   --detach          start in window t<issue> of the tmux session "tickets" and return
+#   --model           Claude model alias (default: sonnet)
+#   --feedback-file   resume the ticket's conversation once with this message (CI failure,
+#                     review findings, merge conflict), then exit
 #
 # Environment:
-#   MAX_ATTEMPTS  Claude runs before giving up (default 6)
+#   MAX_ATTEMPTS  Claude runs before giving up on reaching a PR (default 6)
 #   WAIT_MIN      minutes to wait between runs, e.g. for usage limits (default 30)
+#   MAX_FEEDBACK  feedback rounds per ticket before asking a human (default 3)
 #
-# The run is done when an open PR exists for the issue's branch. Each run that
-# ends without a PR waits WAIT_MIN and resumes the same conversation. If the
-# agent labels the issue needs-human, or attempts run out, the script labels the
-# issue needs-human and stops. The tmux window closes when the script exits.
+# Implement mode is done when an open PR exists for the issue's branch. Each run that
+# ends without a PR waits WAIT_MIN and resumes the same conversation. If the agent
+# labels the issue needs-human, or attempts run out, the script labels the issue
+# needs-human and stops. The tmux window closes when the script exits.
 # Logs: <workspace>/logs/ticket-<issue>.log. Worktrees: <workspace>/wt/<branch>.
 set -euo pipefail
 
-usage() { echo "usage: $0 <issue> [--model sonnet|opus] [--detach]" >&2; exit 2; }
+usage() { echo "usage: $0 <issue> [--model sonnet|opus] [--detach] [--feedback-file <path>]" >&2; exit 2; }
 [[ $# -ge 1 && $1 =~ ^[0-9]+$ ]] || usage
 N=$1; shift
 MODEL=sonnet
 DETACH=0
+FEEDBACK_FILE=
 while [[ $# -gt 0 ]]; do
   case $1 in
     --model) MODEL=${2:?--model needs a value}; shift 2 ;;
     --detach) DETACH=1; shift ;;
+    --feedback-file) FEEDBACK_FILE=${2:?--feedback-file needs a path}; shift 2 ;;
     *) usage ;;
   esac
 done
 MAX_ATTEMPTS=${MAX_ATTEMPTS:-6}
 WAIT_MIN=${WAIT_MIN:-30}
+MAX_FEEDBACK=${MAX_FEEDBACK:-3}
 
 MAIN=$(git -C "$(dirname "$0")" worktree list --porcelain | awk '/^worktree /{print $2; exit}')
 WS=$(dirname "$MAIN")
@@ -41,8 +47,10 @@ LOG=$WS/logs/ticket-$N.log
 if [[ $DETACH == 1 ]]; then
   command -v tmux >/dev/null || { echo "tmux not found" >&2; exit 1; }
   tmux has-session -t tickets 2>/dev/null || tmux new-session -d -s tickets -n home
+  extra=""
+  [[ -n $FEEDBACK_FILE ]] && extra="--feedback-file '$FEEDBACK_FILE'"
   tmux new-window -d -t tickets -n "t$N" \
-    "MAX_ATTEMPTS=$MAX_ATTEMPTS WAIT_MIN=$WAIT_MIN '$MAIN/scripts/run-ticket.sh' $N --model $MODEL"
+    "MAX_ATTEMPTS=$MAX_ATTEMPTS WAIT_MIN=$WAIT_MIN MAX_FEEDBACK=$MAX_FEEDBACK '$MAIN/scripts/run-ticket.sh' $N --model $MODEL $extra 2>>'$LOG'"
   echo "Started issue #$N in tmux session 'tickets', window t$N. Log: $LOG"
   exit 0
 fi
@@ -51,17 +59,50 @@ log() { echo "[$(date '+%F %T')] $*" | tee -a "$LOG"; }
 
 REPO=$(cd "$MAIN" && gh repo view --json nameWithOwner -q .nameWithOwner)
 
+has_pr() { [[ $(gh pr list -R "$REPO" --head "$BRANCH" --state open --json number --jq length) -gt 0 ]]; }
+has_label() { gh issue view "$N" -R "$REPO" --json labels --jq '.labels[].name' | grep -qx "$1"; }
+set_labels() { gh issue edit "$N" -R "$REPO" "$@" >/dev/null || true; }
+give_up() {
+  set_labels --remove-label in-progress --add-label needs-human
+  gh issue comment "$N" -R "$REPO" --body "$1 Branch \`$BRANCH\`; see \`logs/ticket-$N.log\` on the VPS." >/dev/null
+  log "$1 Labeled needs-human."
+  exit 1
+}
+
+title=$(gh issue view "$N" -R "$REPO" --json title -q .title)
+slug=$(printf '%s' "$title" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//' | cut -c1-40 | sed -E 's/-+$//')
+BRANCH="$N-$slug"
+# Reuse an existing branch for this issue, whatever slug it was created with.
+existing=$(git -C "$MAIN" for-each-ref --format='%(refname:short)' "refs/heads/$N-*" | head -1)
+[[ -n $existing ]] && BRANCH=$existing
+WT=$WS/wt/$BRANCH
+
+# ---- Feedback mode: one resumed run on an existing ticket conversation ----
+if [[ -n $FEEDBACK_FILE ]]; then
+  [[ -f $FEEDBACK_FILE ]] || { log "Feedback file $FEEDBACK_FILE not found."; exit 1; }
+  [[ -d $WT ]] || { log "No worktree $WT for #$N; cannot resume."; exit 1; }
+  cd "$WT"
+  rounds_file=$(git rev-parse --git-dir)/run-ticket-feedback-rounds
+  rounds=$(( $(cat "$rounds_file" 2>/dev/null || echo 0) + 1 ))
+  echo "$rounds" > "$rounds_file"
+  (( rounds <= MAX_FEEDBACK )) || give_up "Feedback round $rounds exceeds $MAX_FEEDBACK without converging."
+  log "Feedback round $rounds/$MAX_FEEDBACK on #$N (model $MODEL)"
+  set +e
+  claude --model "$MODEL" --continue -p "$(cat "$FEEDBACK_FILE")" 2>&1 | tee -a "$LOG"
+  status=${PIPESTATUS[0]}
+  set -e
+  log "Claude exited with status $status"
+  rm -f "$FEEDBACK_FILE"
+  exit 0
+fi
+
+# ---- Implement mode ----
 open_blockers=$(gh api "repos/$REPO/issues/$N/dependencies/blocked_by" \
   --jq '[.[] | select(.state == "open") | "#\(.number)"] | join(" ")')
 if [[ -n $open_blockers ]]; then
   log "Issue #$N is blocked by $open_blockers; not starting."
   exit 1
 fi
-
-title=$(gh issue view "$N" -R "$REPO" --json title -q .title)
-slug=$(printf '%s' "$title" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//' | cut -c1-40 | sed -E 's/-+$//')
-BRANCH="$N-$slug"
-WT=$WS/wt/$BRANCH
 
 if [[ ! -d $WT ]]; then
   git -C "$MAIN" fetch -q origin
@@ -74,10 +115,6 @@ if [[ ! -d $WT ]]; then
 fi
 cd "$WT"
 MARK=$(git rev-parse --git-dir)/run-ticket-started
-
-has_pr() { [[ $(gh pr list -R "$REPO" --head "$BRANCH" --state open --json number --jq length) -gt 0 ]]; }
-has_label() { gh issue view "$N" -R "$REPO" --json labels --jq '.labels[].name' | grep -qx "$1"; }
-set_labels() { gh issue edit "$N" -R "$REPO" "$@" >/dev/null; }
 
 PROMPT_FIRST="Implement GitHub issue #$N end to end following the ticket-flow skill. You are running unattended on branch $BRANCH in its own worktree: nobody can answer questions, so work through to an open pull request."
 PROMPT_CONT="Continue GitHub issue #$N from where you stopped, following the ticket-flow skill. Start by checking git status, the branch's commits and whether a pull request already exists."
@@ -117,7 +154,4 @@ if has_pr; then
   exit 0
 fi
 
-set_labels --remove-label in-progress --add-label needs-human
-gh issue comment "$N" -R "$REPO" --body "Unattended run stopped after $MAX_ATTEMPTS attempts without a pull request. Branch \`$BRANCH\`; see \`logs/ticket-$N.log\` on the VPS." >/dev/null
-log "Gave up on #$N after $MAX_ATTEMPTS attempts; labeled needs-human."
-exit 1
+give_up "Unattended run stopped after $MAX_ATTEMPTS attempts without a pull request."
