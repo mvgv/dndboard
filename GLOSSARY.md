@@ -79,3 +79,13 @@ _Avoid_: command, order, input
 **Legal Actions**:
 The active creature's choices this turn, precomputed by the server: reachable squares with their movement cost, valid targets, areas of effect. The client only renders them.
 _Avoid_: options, moves (for the whole set)
+
+### Content format
+
+**Entry**:
+One piece of Compendium or Adventure data in the content format, such as a weapon or a stat block. Entries are pure data, validated against the schema, and reference each other by ID.
+_Avoid_: record, row, asset
+
+**Review status**:
+Whether an Entry is `draft` or `approved`. Only approved Entries load into the game; an approved Entry may only reference approved Entries.
+_Avoid_: state, flag, verified
