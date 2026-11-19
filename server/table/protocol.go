@@ -217,10 +217,11 @@ func (in Intent) sessionIntent() (session.Intent, error) {
 	return nil, &session.Rejection{Code: session.NoSuchOption, Reason: "unknown intent " + quote(in.Kind)}
 }
 
+// quote quotes client text for a rejection reason, cut to a few characters.
 func quote(s string) string {
-	const max = 32
-	if len(s) > max {
-		s = s[:max] + "…"
+	const maxRunes = 32
+	if r := []rune(s); len(r) > maxRunes {
+		s = string(r[:maxRunes]) + "…"
 	}
 	return `"` + s + `"`
 }
@@ -230,8 +231,13 @@ func quote(s string) string {
 // hidden. sides gives the damage die of a creature's attack.
 func wireEvents(evs []session.Event, pc func(session.ID) bool, sides func(session.ID) int) []Event {
 	out := make([]Event, 0, len(evs))
-	var roller session.ID // the attacker whose damage follows
+	// roller is the attacker of the event just before: an attack's damage
+	// follows its attack roll at once, and damage after anything else (an
+	// Effect) has no roller.
+	var roller session.ID
 	for _, e := range evs {
+		attacker := roller
+		roller = ""
 		switch e := e.(type) {
 		case session.InitiativeRolled:
 			w := Event{Type: "initiative_rolled", Creature: string(e.Creature)}
@@ -261,12 +267,11 @@ func wireEvents(evs []session.Event, pc func(session.ID) bool, sides func(sessio
 			// The adjustment is the target's, seen in play; the dice are the roller's.
 			w := Event{Type: "damage_dealt", Target: string(e.Target), Amount: new(e.Amount),
 				Damage: e.Type, Adjustment: e.Adjustment, HPAfter: new(e.HPAfter)}
-			if pc(roller) {
-				w.Rolls, w.Sides, w.Bonus, w.Raw = e.Rolls, new(sides(roller)), new(e.Bonus), new(e.Raw)
+			if pc(attacker) {
+				w.Rolls, w.Sides, w.Bonus, w.Raw = e.Rolls, new(sides(attacker)), new(e.Bonus), new(e.Raw)
 			} else {
 				w.Hidden = true
 			}
-			roller = "" // damage without an attack (an Effect) has no roller
 			out = append(out, w)
 		case session.SaveRolled:
 			out = append(out, d20Test("save_rolled", e.Creature, e.Ability, e.D20, e.Modifier, e.Total,

@@ -6,9 +6,12 @@
 package table
 
 import (
+	"context"
 	"fmt"
+	"log"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/mvgv/dndboard/server/board"
 	"github.com/mvgv/dndboard/server/dice"
@@ -95,10 +98,10 @@ func (t *Table) Join() (welcome Message, updates <-chan Message, leave func()) {
 	defer t.mu.Unlock()
 	ch := make(chan Message, buffer)
 	t.clients[ch] = struct{}{}
-	board := t.board
-	board.Rows = slices.Clone(board.Rows)
+	b := t.board
+	b.Rows = slices.Clone(b.Rows)
 	welcome = t.message("welcome", t.s.Log())
-	welcome.Board = &board
+	welcome.Board = &b
 	return welcome, ch, func() {
 		t.mu.Lock()
 		defer t.mu.Unlock()
@@ -132,7 +135,40 @@ func (t *Table) Submit(in Intent) error {
 	if err != nil {
 		return err
 	}
-	evs = append(evs, t.playBrain()...)
+	t.broadcast(append(evs, t.playBrain()...))
+	return nil
+}
+
+// Advance tells the table that d of waiting time has passed. When a pending
+// Reaction Prompt runs out of time, the creature does not react, play resumes
+// (the Brain's creatures act until a Player Character's turn) and every client
+// gets an update. Without a pending prompt it does nothing.
+func (t *Table) Advance(d time.Duration) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	evs := t.s.Advance(d)
+	if len(evs) == 0 {
+		return
+	}
+	t.broadcast(append(evs, t.playBrain()...))
+}
+
+// Run advances the table's clock every interval until ctx is done, so pending
+// Reaction Prompts time out in real time.
+func (t *Table) Run(ctx context.Context, every time.Duration) {
+	tick := time.NewTicker(every)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			t.Advance(every)
+		}
+	}
+}
+
+func (t *Table) broadcast(evs []session.Event) {
 	m := t.message("update", evs)
 	for ch := range t.clients {
 		select {
@@ -141,11 +177,11 @@ func (t *Table) Submit(in Intent) error {
 			t.drop(ch)
 		}
 	}
-	return nil
 }
 
 // playBrain lets the Brain act while a creature it plays is active. It stops
-// on a Reaction Prompt: the game is paused until the prompt is answered.
+// on a Reaction Prompt: the game is paused until the prompt is answered or
+// times out (Advance).
 func (t *Table) playBrain() []session.Event {
 	var out []session.Event
 	for range maxBrainSteps {
@@ -155,10 +191,14 @@ func (t *Table) playBrain() []session.Event {
 		}
 		evs, err := t.s.Submit(t.brain.Choose(st, t.s.LegalActions()))
 		if err != nil {
-			evs, _ = t.s.Submit(session.EndTurn{Actor: st.Active})
+			if evs, err = t.s.Submit(session.EndTurn{Actor: st.Active}); err != nil {
+				log.Printf("table: %s's turn is stuck: ending it was refused: %v", st.Active, err)
+				return out
+			}
 		}
 		out = append(out, evs...)
 	}
+	log.Printf("table: the Brain took %d steps without reaching a Player Character's turn", maxBrainSteps)
 	return out
 }
 

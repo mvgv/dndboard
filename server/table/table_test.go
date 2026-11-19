@@ -3,7 +3,9 @@ package table_test
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/mvgv/dndboard/server/board"
 	"github.com/mvgv/dndboard/server/dice"
@@ -197,6 +199,52 @@ func TestIntentUpdatesEveryConnectedClient(t *testing.T) {
 	}
 }
 
+// Every wire intent kind reaches its session intent: each resolves into the
+// session's event for it, or is refused by the session's own rule.
+func TestEveryIntentKindReachesTheSession(t *testing.T) {
+	for _, tc := range []struct {
+		kind, event, refusal string
+	}{
+		{kind: "dash", event: "dashed"},
+		{kind: "disengage", event: "disengaged"},
+		{kind: "stand", event: "stood_up"},
+		{kind: "leave", event: "creature_left"},
+		{kind: "end_turn", event: "turn_ended"},
+		{kind: "nimble_escape", refusal: "has no Nimble Escape"}, // a Goblin Warrior trait
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			f := fighter("fighter", 1, 2)
+			f.Conditions = []session.Condition{session.CondProne}
+			tb, err := table.New(table.Config{
+				Rows:      hall,
+				Creatures: []session.CreatureSpec{f, goblin("goblin", 5, 2)},
+				Dice:      dice.Fixed(20, 1),
+				Brain:     &fakeBrain{},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, ch, leave := tb.Join()
+			defer leave()
+
+			err = tb.Submit(table.Intent{Kind: tc.kind, Actor: "fighter"})
+			if tc.refusal != "" {
+				var rej *session.Rejection
+				if !errors.As(err, &rej) || !strings.Contains(rej.Reason, tc.refusal) {
+					t.Fatalf("got %v, want the session's refusal %q", err, tc.refusal)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if u := next(t, ch); len(events(u, tc.event)) == 0 {
+				t.Fatalf("events = %+v, want %s", u.Events, tc.event)
+			}
+		})
+	}
+}
+
 func TestRejectedIntentChangesNothingAndBroadcastsNothing(t *testing.T) {
 	tb := duel(t, &fakeBrain{})
 	_, ch, leave := tb.Join()
@@ -335,8 +383,10 @@ func TestApproachBrainClosesInAndAttacks(t *testing.T) {
 }
 
 // A Reaction Prompt pauses the game: the table shows it and waits instead of
-// letting the Brain retry. Answering it from the client is #16.
-func TestReactionPromptPausesTheTable(t *testing.T) {
+// letting the Brain retry. When the reaction timeout passes, the creature does
+// not react and play resumes (Glossary, Reaction Prompt). Answering the prompt
+// from the client is #16.
+func TestReactionPromptPausesTheTableUntilItTimesOut(t *testing.T) {
 	f := fighter("fighter", 5, 2)
 	f.Reactions = session.ReactAsk
 	brain := &fakeBrain{script: []session.Intent{session.Move{Actor: "goblin", To: board.Pos{X: 1, Y: 2}}}}
@@ -349,7 +399,7 @@ func TestReactionPromptPausesTheTable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w, _, leave := tb.Join()
+	w, ch, leave := tb.Join()
 	defer leave()
 
 	p := events(w, "reaction_prompted")
@@ -365,6 +415,24 @@ func TestReactionPromptPausesTheTable(t *testing.T) {
 	if brain.calls != 1 {
 		t.Fatalf("brain asked %d times while paused, want 1", brain.calls)
 	}
+
+	tb.Advance(29 * time.Second)
+	none(t, ch)
+
+	tb.Advance(time.Second)
+	u := next(t, ch)
+	if len(events(u, "reaction_timed_out")) != 1 || len(events(u, "moved")) != 1 {
+		t.Fatalf("after the timeout: events %+v", u.Events)
+	}
+	if g := creature(t, u.State, "goblin"); g.X != 1 || g.Y != 2 {
+		t.Fatalf("goblin = %+v, want its move finished at 1,2", g)
+	}
+	if u.State.Pending != nil || u.State.Active != "fighter" || u.Legal == nil {
+		t.Fatalf("after the timeout: pending %+v, active %q, legal %+v", u.State.Pending, u.State.Active, u.Legal)
+	}
+
+	tb.Advance(time.Minute) // nothing pending: no update
+	none(t, ch)
 }
 
 // A Player Character at 0 Hit Points is Dying: its Death Saving Throw is a
@@ -419,14 +487,29 @@ func TestDyingPlayerCharacterCanBeStabilizedFromTheClient(t *testing.T) {
 }
 
 func TestApproachBrainPrefersAStandingTarget(t *testing.T) {
-	st := session.State{Creatures: map[session.ID]session.CreatureState{
-		"goblin": {Team: "monsters"},
-		"a":      {Team: "party", Down: true},
-		"b":      {Team: "party"},
-	}}
-	la := session.LegalActions{Creature: "goblin", Attacks: []session.AttackOption{{Target: "a"}, {Target: "b"}}}
-	if got := (table.Approach{}).Choose(st, la); got != (session.Attack{Actor: "goblin", Target: "b"}) {
-		t.Fatalf("choice = %+v, want an attack on b, who is still standing", got)
+	tb, err := table.New(table.Config{
+		Rows:      hall,
+		Creatures: []session.CreatureSpec{fighter("a", 1, 2), fighter("b", 1, 3), goblin("goblin", 2, 2)},
+		// Initiative: a 1, b 1, goblin 20: the goblin goes first.
+		// Round 1, goblin attacks a (listed first): d20 20 is a Critical Hit,
+		// 2d6 6+6 + 2 = 14 drops a to 0. a's Death Saving Throw: 10.
+		// Round 2, goblin attacks again: d20 1, a miss. a's Death Saving Throw: 10.
+		Dice:  dice.Fixed(1, 1, 20, 20, 6, 6, 10, 1, 10),
+		Brain: table.Approach{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, ch, leave := tb.Join()
+	defer leave()
+	if a := creature(t, w.State, "a"); !a.Down || w.State.Active != "b" {
+		t.Fatalf("after round 1: a %+v, active %q", a, w.State.Active)
+	}
+
+	submit(t, tb, table.Intent{Kind: "end_turn", Actor: "b"})
+	atk := events(next(t, ch), "attack_rolled")
+	if len(atk) != 1 || atk[0].Target != "b" {
+		t.Fatalf("goblin attacks = %+v, want b, who is still standing", atk)
 	}
 }
 

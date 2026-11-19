@@ -38,6 +38,7 @@ func _ready() -> void:
 	_conn.closed.connect(func(reason: String) -> void:
 		_hud.set_connected(false)
 		_hud.set_status("Desconectado: " + reason)
+		_waiting = false # the intent's answer will never come
 		_set_legal({}))
 	_conn.message_received.connect(_on_message)
 	_hud.connect_requested.connect(_connect_to)
@@ -122,6 +123,7 @@ func _handle(m: Dictionary) -> void:
 
 
 func _welcome(m: Dictionary) -> void:
+	_waiting = false # a fresh connection has no intent out
 	var board: Dictionary = m["board"]
 	_board.build(board["rows"])
 	_pivot.position = Vector3(float(board["width"]) / 2.0, 0, float(board["height"]) / 2.0)

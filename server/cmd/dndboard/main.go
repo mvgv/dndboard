@@ -6,6 +6,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -49,6 +50,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	go tb.Run(context.Background(), time.Second) // Reaction Prompts time out
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /play", ws.Handler(tb))
@@ -65,6 +67,10 @@ func creatures() []session.CreatureSpec {
 		f := srd.Fighter()
 		f.ID, f.Name, f.Pos = session.ID(fmt.Sprintf("fighter-%d", i+1)), fmt.Sprintf("Fighter %d", i+1), p
 		f.PlayerCharacter = true // played from the clients; Dying at 0 Hit Points
+		// The glossary's default for a Player Character is to ask (a Reaction
+		// Prompt), but the client cannot answer prompts until #16; asking now
+		// would only ever time out, so the demo Fighters always react.
+		f.Reactions = session.ReactAlways
 		cs = append(cs, f)
 	}
 	for i, p := range []board.Pos{{X: 11, Y: 1}, {X: 12, Y: 5}, {X: 9, Y: 6}} {
