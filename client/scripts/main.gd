@@ -15,6 +15,7 @@ var _dice := DiceTray.new()
 var _hud := Hud.new()
 var _camera := Camera3D.new()
 var _pivot := Node3D.new()
+var _camera_distance := 10.0
 
 var _standees := {} # creature id -> Standee
 var _names := {} # creature id -> display name
@@ -76,7 +77,8 @@ func _build_scene() -> void:
 
 
 func _place_camera(distance: float) -> void:
-	_camera.position = Vector3(0, distance * 0.85, distance * 0.6)
+	_camera_distance = clampf(distance, 4.0, 30.0)
+	_camera.position = Vector3(0, _camera_distance * 0.85, _camera_distance * 0.6)
 	_camera.look_at_from_position(_camera.position, Vector3.ZERO)
 
 
@@ -240,9 +242,7 @@ func _damage(e: Dictionary) -> void:
 		line += ": dados %s + %d" % [", ".join(rolls.map(func(r: Variant) -> String: return str(int(r)))), int(e["bonus"])]
 	_hud.add_log(line)
 	_dice.float_text("-%d" % amount, _head(id), Color(1, 0.4, 0.3))
-	var s: Standee = _standees.get(id)
-	if s:
-		await get_tree().create_timer(0.3).timeout
+	await get_tree().create_timer(0.3).timeout
 
 
 # --- Input ---------------------------------------------------------------
@@ -261,9 +261,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			MOUSE_BUTTON_LEFT:
 				_click(_square_under(mb.position))
 			MOUSE_BUTTON_WHEEL_UP:
-				_place_camera(maxf(_camera.position.length() * 0.9 / 1.04, 4.0))
+				_place_camera(_camera_distance * 0.9)
 			MOUSE_BUTTON_WHEEL_DOWN:
-				_place_camera(minf(_camera.position.length() * 1.1 / 1.04, 30.0))
+				_place_camera(_camera_distance * 1.1)
 	elif event is InputEventKey and event.pressed:
 		match (event as InputEventKey).keycode:
 			KEY_Q:
