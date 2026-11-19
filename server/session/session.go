@@ -21,6 +21,8 @@ type Config struct {
 	Seed uint64
 	// Dice overrides the seeded roller (scenario tests).
 	Dice dice.Roller
+	// Objects are the clickable objects placed on the Board.
+	Objects []ObjectSpec
 }
 
 type creature struct {
@@ -28,6 +30,10 @@ type creature struct {
 	hp           int
 	gone         bool // fled or surrendered: no longer in the combat
 	reactionUsed bool // regained at the start of the creature's own turn
+	dodging      bool // until the start of the creature's next turn
+	hidden       bool // Invisible from the Hide action
+	hideDC       int  // the Stealth check total, the DC to find the creature
+	ready        *readied
 }
 
 func (c *creature) down() bool { return c.hp <= 0 }
@@ -51,6 +57,11 @@ type Session struct {
 	over      bool
 	winner    Team
 	log       []Event
+
+	objects     map[ID]*object
+	objectOrder []ID
+	helpAttacks []helpAttack
+	helpChecks  []helpCheck
 }
 
 // New places the creatures, rolls Initiative and starts the first turn.
@@ -84,6 +95,9 @@ func New(cfg Config) (*Session, error) {
 	}
 	if len(teams) < 2 {
 		return nil, fmt.Errorf("session: combat needs at least two teams")
+	}
+	if err := s.placeObjects(cfg.Objects); err != nil {
+		return nil, err
 	}
 	s.rollInitiative()
 	s.round = 1
@@ -127,6 +141,14 @@ func (s *Session) startTurn(out *[]Event) {
 	s.movedFt, s.dashedFt = 0, 0
 	s.acted, s.bonused, s.disengage = false, false, false
 	c.reactionUsed = false
+	// Dodge and Help last "until the start of your next turn"; a Readied
+	// action can be taken "before the start of your next turn".
+	c.dodging = false
+	s.expireHelp(c.ID)
+	if c.ready != nil {
+		c.ready = nil
+		*out = append(*out, ReadyLapsed{Creature: c.ID})
+	}
 	*out = append(*out, TurnStarted{Creature: c.ID, Round: s.round})
 }
 
@@ -174,6 +196,12 @@ func (s *Session) Submit(in Intent) ([]Event, error) {
 			return nil, err
 		}
 		out = ev
+	case Dodge, Help, HelpCheck, Hide, Search, Utilize, Ready:
+		ev, err := s.standardAction(in)
+		if err != nil {
+			return nil, err
+		}
+		out = ev
 	case NimbleEscape:
 		c := s.active()
 		switch {
@@ -197,20 +225,30 @@ func (s *Session) Submit(in Intent) ([]Event, error) {
 
 func (s *Session) move(in Move) ([]Event, error) {
 	c := s.active()
-	cost, ok := s.reachable(c)[in.To]
+	cost, ok := s.reachable(c, c.SpeedFt+s.dashedFt-s.movedFt)[in.To]
 	if !ok {
 		return nil, reject(Unreachable, "%v is not reachable with %d ft of movement left", in.To, c.SpeedFt+s.dashedFt-s.movedFt)
 	}
+	out, moved := s.relocate(c, in.To, cost, s.disengage)
+	if moved {
+		s.movedFt += cost
+	}
+	return out, nil
+}
+
+// relocate moves c to a square, provoking Opportunity Attacks and setting off
+// Readied actions; moved is false when an Opportunity Attack downed c first.
+func (s *Session) relocate(c *creature, to board.Pos, cost int, disengaged bool) (out []Event, moved bool) {
 	from := c.Pos
-	var out []Event
 	// Opportunity Attacks (SRD "Playing the Game", Opportunity Attacks): a
 	// hostile creature that still has its Reaction attacks right before the mover
 	// leaves its reach, unless the mover Disengaged. Only the start and end
-	// squares are compared, so passing through a reach is not modeled.
-	if !s.disengage {
+	// squares are compared, so passing through a reach is not modeled. An
+	// attacker can't strike a mover it can't see (a hidden one).
+	if !disengaged && !c.hidden {
 		for _, id := range s.order {
 			o := s.creatures[id]
-			if o.Team == c.Team || o.out() || o.reactionUsed || !inReach(o, from) || inReach(o, in.To) {
+			if o.Team == c.Team || o.out() || o.reactionUsed || !inReach(o, from) || inReach(o, to) {
 				continue
 			}
 			o.reactionUsed = true
@@ -219,16 +257,20 @@ func (s *Session) move(in Move) ([]Event, error) {
 			if c.down() {
 				// The mover never leaves its square, and a downed creature's
 				// turn is over unless the combat ended with it.
-				if !s.over {
+				if !s.over && c == s.active() {
 					out = append(out, s.endTurn()...)
 				}
-				return out, nil
+				return out, false
 			}
 		}
 	}
-	c.Pos = in.To
-	s.movedFt += cost
-	return append(out, Moved{Creature: c.ID, From: from, To: in.To, CostFt: cost}), nil
+	c.Pos = to
+	out = append(out, Moved{Creature: c.ID, From: from, To: to, CostFt: cost})
+	out = append(out, s.fireReadied(c, from)...)
+	if c.down() && !s.over && c == s.active() {
+		out = append(out, s.endTurn()...)
+	}
+	return out, true
 }
 
 // takeAction spends the action on one of the standard actions.
@@ -275,6 +317,8 @@ func (s *Session) attack(in Attack) ([]Event, error) {
 		return nil, reject(InvalidTarget, "%s is not hostile", t.ID)
 	case t.out():
 		return nil, reject(InvalidTarget, "%s is down or gone", t.ID)
+	case t.hidden:
+		return nil, reject(InvalidTarget, "%s can't be seen", t.ID)
 	case !inReach(c, t.Pos):
 		return nil, reject(OutOfReach, "%s is %d ft away, beyond %s's %d ft reach",
 			t.ID, board.Distance(c.Pos, t.Pos)*board.SquareFeet, c.Attack.Name, c.Attack.ReachFt)
@@ -288,14 +332,25 @@ func (s *Session) resolveAttack(c, t *creature) []Event {
 	// Attack roll: hits if the total equals or exceeds AC; a natural 20 hits
 	// as a Critical Hit, a natural 1 misses (SRD "Playing the Game", Attack Rolls).
 	a := c.Attack
-	d20 := s.dice.Roll(20)
+	// Advantage: the attacker is hidden (Invisible) or the target was helped
+	// (Help). Disadvantage: the target is Dodging. Both cancel each other.
+	adv, dis := c.hidden, t.dodging
+	if s.consumeHelpAttack(c, t) {
+		adv = true
+	}
+	d20, mode := s.rollD20(adv, dis)
 	total := d20 + a.ToHit
 	crit := d20 == 20
 	hit := crit || (d20 != 1 && total >= t.AC)
 	out := []Event{AttackRolled{
 		Attacker: c.ID, Target: t.ID, Weapon: a.Name, D20: d20, Modifier: a.ToHit,
-		Total: total, AC: t.AC, Hit: hit, Critical: crit,
+		Total: total, AC: t.AC, Hit: hit, Critical: crit, Mode: mode,
 	}}
+	if c.hidden {
+		// Hiding ends when you make an attack roll (SRD glossary, Hide).
+		c.hidden = false
+		out = append(out, Revealed{Creature: c.ID, Reason: "attack roll"})
+	}
 	if !hit {
 		return out
 	}
@@ -364,8 +419,8 @@ func inReach(c *creature, p board.Pos) bool {
 // be passed through at normal cost but not ended in; a hostile creature's space
 // can't be entered ("Playing the Game", Moving around Other Creatures). Passing
 // hostile creatures two sizes apart or Incapacitated is not modeled yet.
-func (s *Session) reachable(c *creature) map[board.Pos]int {
-	budget := (c.SpeedFt + s.dashedFt - s.movedFt) / board.SquareFeet
+func (s *Session) reachable(c *creature, budgetFt int) map[board.Pos]int {
+	budget := budgetFt / board.SquareFeet
 	occupant := map[board.Pos]*creature{}
 	for _, o := range s.creatures {
 		if o != c && !o.out() {
@@ -382,7 +437,7 @@ func (s *Session) reachable(c *creature) map[board.Pos]int {
 		for dx := -1; dx <= 1; dx++ {
 			for dy := -1; dy <= 1; dy++ {
 				next := board.Pos{X: cur.pos.X + dx, Y: cur.pos.Y + dy}
-				if next == cur.pos || !s.board.CanStep(cur.pos, next) {
+				if next == cur.pos || !s.board.CanStep(cur.pos, next) || s.blocked(next) {
 					continue
 				}
 				step, _ := s.board.EntryCost(next)
@@ -417,8 +472,10 @@ func (s *Session) State() State {
 	for id, c := range s.creatures {
 		st.Creatures[id] = CreatureState{Name: c.Name, Team: c.Team, Pos: c.Pos,
 			HP: c.hp, MaxHP: c.MaxHP, AC: c.AC, Down: c.down(),
-			Gone: c.gone, ReactionAvailable: !c.out() && !c.reactionUsed}
+			Gone: c.gone, ReactionAvailable: !c.out() && !c.reactionUsed,
+			Dodging: c.dodging, Hidden: c.hidden, Readied: c.ready != nil}
 	}
+	st.Objects = s.objectStates()
 	return st
 }
 
@@ -435,7 +492,8 @@ func (s *Session) LegalActions() LegalActions {
 	la.Dash, la.Disengage = !s.acted, !s.acted
 	la.NimbleEscape = c.NimbleEscape && !s.bonused
 	la.BonusAction = la.NimbleEscape // the only Bonus Action modeled so far
-	for p, cost := range s.reachable(c) {
+	s.standardActionOptions(c, &la)
+	for p, cost := range s.reachable(c, la.MovementLeftFt) {
 		la.Moves = append(la.Moves, MoveOption{To: p, CostFt: cost})
 	}
 	slices.SortFunc(la.Moves, func(a, b MoveOption) int {
@@ -444,7 +502,7 @@ func (s *Session) LegalActions() LegalActions {
 	if !s.acted {
 		for _, id := range s.order {
 			t := s.creatures[id]
-			if t.Team != c.Team && !t.out() && inReach(c, t.Pos) {
+			if t.Team != c.Team && !t.out() && !t.hidden && inReach(c, t.Pos) {
 				la.Attacks = append(la.Attacks, AttackOption{Target: id, Weapon: c.Attack.Name})
 			}
 		}
