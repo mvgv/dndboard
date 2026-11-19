@@ -99,8 +99,8 @@ An Entry for a class feature, feat or trait (Sneak Attack, Rage, Savage Attacker
 _Avoid_: ability, perk, trait (as the Entry kind)
 
 **Effect**:
-One declarative behavior of a Feature: a trigger (such as hitting with an attack), conditions that must all hold, a frequency (always, or once per turn) and an outcome (such as extra damage or Resistance). The rules engine interprets it; the vocabulary is closed and grows with the engine.
-_Avoid_: rule, script, modifier
+One declarative behavior of a Feature: a trigger (such as hitting with an attack), conditions that must all hold, a frequency (always, or once per turn) and an outcome (such as extra damage or Resistance). The rules engine interprets it; the vocabulary is closed and grows with the engine. An Effect's conditions are tests on the situation (`content.Condition`), not the Ruleset's conditions such as Incapacitated or Prone.
+_Avoid_: rule, script, modifier; "condition" alone for an Effect's tests when a Ruleset condition could be meant (say "effect condition")
 
 **Activation**:
 What makes a Feature's Effects apply only while it is on: its cost (a Bonus Action), uses, duration, what extends it and what ends it early, as for Rage.

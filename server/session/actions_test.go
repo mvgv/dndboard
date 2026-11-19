@@ -50,6 +50,31 @@ func TestHelpGivesAdvantageToTheNextAllyAttackRoll(t *testing.T) {
 	}
 }
 
+// "This benefit expires at the start of your next turn" holds even when the
+// helper is down by then and its turn is skipped.
+func TestHelpExpiresWhenTheDownedHelpersTurnIsSkipped(t *testing.T) {
+	f := fighter("fighter", 3, 1)
+	f.MaxHP = 1
+	// fighter 15+1, rogue 10+3, goblin 5+2.
+	s := start(t, dice.Fixed(15, 10, 5,
+		15, 1, // goblin downs the fighter: 19 hits AC 16, 1+2 = 3
+		12, 4, // round 2: the rogue rolls one d20 (no Advantage left), 17 hits; 1d6 4
+	), f, rogue("rogue", 4, 3), goblin("goblin", 4, 2))
+	submit(t, s, session.Help{Actor: "fighter", Target: "goblin"})
+	endTurn(t, s) // fighter
+	endTurn(t, s) // rogue holds its attack
+	submit(t, s, session.Attack{Actor: "goblin", Target: "fighter"})
+	endTurn(t, s) // goblin; the downed fighter's turn is skipped
+
+	evs := submit(t, s, session.Attack{Actor: "rogue", Target: "goblin"})
+	if a := attackRolls(evs)[0]; a.Advantage || len(a.D20s) != 1 {
+		t.Fatalf("attack after the Help expired: %+v", a)
+	}
+	if d := damageTo(t, evs, "goblin"); len(d.Extras) != 0 {
+		t.Fatalf("Sneak Attack with no Advantage and no standing ally: %+v", d)
+	}
+}
+
 // Dodge (SRD 5.2 "Rules Glossary", Dodge [Action]): "until the start of your
 // next turn, any attack roll made against you has Disadvantage if you can see
 // the attacker".

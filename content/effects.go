@@ -338,7 +338,7 @@ func (v *validator) condition(where string, r rawCondition) Condition {
 	note(r.AnyOf != nil, AnyOf)
 	note(r.AllOf != nil, AllOf)
 	if len(set) != 1 {
-		v.errf("%s: condition must set exactly one of %s", where, kindList(triggerConditions[AttackHit], DamageTypeIs))
+		v.errf("%s: condition must set exactly one of %s", where, allConditionKinds())
 		return Condition{}
 	}
 	c := Condition{Kind: set[0]}
@@ -382,11 +382,17 @@ func (v *validator) condition(where string, r rawCondition) Condition {
 	return c
 }
 
-func kindList(kinds []ConditionKind, more ...ConditionKind) string {
+// allConditionKinds lists every condition kind some trigger accepts.
+func allConditionKinds() string {
 	var names []string
-	for _, k := range append(slices.Clone(kinds), more...) {
-		names = append(names, string(k))
+	for _, kinds := range triggerConditions {
+		for _, k := range kinds {
+			if !slices.Contains(names, string(k)) {
+				names = append(names, string(k))
+			}
+		}
 	}
+	slices.Sort(names)
 	return strings.Join(names, ", ")
 }
 

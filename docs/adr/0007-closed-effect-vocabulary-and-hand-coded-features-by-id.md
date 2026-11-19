@@ -6,4 +6,5 @@ A Feature's Effects use a closed vocabulary of triggers, conditions, frequencies
 
 - Renaming a flagged Feature's ID breaks its binding; the engine refuses to start a combat with a flagged Feature it has no code for, so the break is loud.
 - Adding a vocabulary word touches the content package (validation) and the engine (interpretation) together; the Forge can only emit words already in it.
+- A condition may join the vocabulary before the engine models what it tests, when the engine can still resolve it exactly: it holds for nothing that exists yet. `ranged_weapon` is the one such word; it is false while every weapon is a Melee weapon, which lets Sneak Attack's text be encoded whole. Outcomes, triggers and activation words get no such allowance.
 - Level scaling (Sneak Attack dice, Rage Damage, Rage uses) isn't in the vocabulary yet: each Entry is the level-1 instance until character progression lands.

@@ -155,9 +155,14 @@ func (s *Session) startTurn(out *[]Event) {
 	s.movedFt, s.dashedFt = 0, 0
 	s.acted, s.bonused, s.disengage, s.lightAttack = false, false, false, false
 	c.reactionUsed, c.dodging = false, false
-	// Help's benefit "expires at the start of your next turn".
-	s.helps = slices.DeleteFunc(s.helps, func(h help) bool { return h.helper == c })
+	s.expireHelps(c)
 	*out = append(*out, TurnStarted{Creature: c.ID, Round: s.round})
+}
+
+// expireHelps ends c's pending Help: its benefit "expires at the start of your
+// next turn", which comes even when c is down or gone and the turn is skipped.
+func (s *Session) expireHelps(c *creature) {
+	s.helps = slices.DeleteFunc(s.helps, func(h help) bool { return h.helper == c })
 }
 
 // Log returns every event since the session started.
@@ -557,6 +562,7 @@ func (s *Session) endTurn() []Event {
 		if !s.active().out() {
 			break
 		}
+		s.expireHelps(s.active()) // its turn is skipped
 	}
 	s.startTurn(&out)
 	return out
