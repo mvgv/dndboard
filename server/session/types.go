@@ -620,6 +620,8 @@ type LegalActions struct {
 	NimbleEscape          bool // Bonus Action, while unspent
 	Leave                 bool
 	EndTurn               bool
+	// Disengaged: the creature's movement provokes no Opportunity Attacks this turn.
+	Disengaged bool
 }
 
 // UtilizeOption is a Board object the active creature can Utilize.
