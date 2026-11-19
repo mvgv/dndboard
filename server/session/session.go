@@ -415,7 +415,7 @@ func (s *Session) State() State {
 	st := State{Round: s.round, Active: s.active().ID, Order: slices.Clone(s.order),
 		Creatures: map[ID]CreatureState{}, Over: s.over, Winner: s.winner}
 	for id, c := range s.creatures {
-		st.Creatures[id] = CreatureState{Name: c.Name, Team: c.Team, Pos: c.Pos,
+		st.Creatures[id] = CreatureState{Name: c.Name, Type: c.Type, Team: c.Team, Pos: c.Pos,
 			HP: c.hp, MaxHP: c.MaxHP, AC: c.AC, Down: c.down(),
 			Gone: c.gone, ReactionAvailable: !c.out() && !c.reactionUsed}
 	}
