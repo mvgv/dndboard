@@ -64,6 +64,14 @@ func TestHTTPNeedsLoginAndIsRateLimited(t *testing.T) {
 		t.Fatalf("bad login: %d", c)
 	}
 
+	gone := logIn(t, srv, "gone")
+	if c, _ := call(t, srv, "POST", "/logout", gone, ""); c != 200 {
+		t.Fatalf("logout: %d", c)
+	}
+	if c, _ := call(t, srv, "GET", "/adventures", gone, ""); c != http.StatusUnauthorized {
+		t.Fatalf("token works after logout: %d", c)
+	}
+
 	tok := logIn(t, srv, "ana")
 	if c, _ := call(t, srv, "POST", "/campaigns/solo", tok, `{"adventure":"goblins"}`); c != http.StatusForbidden {
 		t.Fatalf("solo: %d", c)

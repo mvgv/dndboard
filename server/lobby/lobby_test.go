@@ -147,6 +147,40 @@ func TestCampaignNeedsEveryCharacterClaimed(t *testing.T) {
 	}
 }
 
+// Joining again changes nothing, but a new Player withdraws readiness.
+func TestJoiningWithdrawsReadinessOnlyForANewPlayer(t *testing.T) {
+	l, _ := newLobby(t, false)
+	c, _ := l.Create("ana", "goblins")
+	l.Claim(c.ID, "ana", "pc-1")
+	l.Ready(c.ID, "ana")
+	if _, err := l.Join(c.Invite, "ana"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := l.Campaign(c.ID, "ana"); len(got.Ready) != 1 || len(got.Players) != 1 {
+		t.Fatalf("rejoining changed the Campaign: %+v", got)
+	}
+	l.Join(c.Invite, "bo")
+	if got, _ := l.Campaign(c.ID, "ana"); len(got.Ready) != 0 || len(got.Players) != 2 {
+		t.Fatalf("a new Player did not withdraw readiness: %+v", got)
+	}
+}
+
+// Campaigns do not end yet, so a Player may create only so many.
+func TestAPlayerCreatesALimitedNumberOfCampaigns(t *testing.T) {
+	l := lobby.New(lobby.Config{Adventures: []lobby.Adventure{adventure}, MaxCampaigns: 2})
+	for range 2 {
+		if _, err := l.Create("ana", "goblins"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := l.Create("ana", "goblins"); !errors.Is(err, lobby.ErrTooManyCampaigns) {
+		t.Fatalf("third Campaign: %v", err)
+	}
+	if _, err := l.Create("bo", "goblins"); err != nil {
+		t.Fatalf("another Player's limit: %v", err)
+	}
+}
+
 // AC: a Player can be assigned more than one Player Character.
 func TestAPlayerCanControlSeveralCharacters(t *testing.T) {
 	l, _ := newLobby(t, false)
@@ -246,8 +280,10 @@ func TestSoloModeNeedsTheDeveloperSetting(t *testing.T) {
 func TestRateLimiterAllowsABurstThenRefills(t *testing.T) {
 	now := time.Unix(0, 0)
 	rl := lobby.NewRateLimiter(2, time.Second, func() time.Time { return now })
-	if !rl.Allow("a") || !rl.Allow("a") {
-		t.Fatal("burst refused")
+	for range 2 {
+		if !rl.Allow("a") {
+			t.Fatal("burst refused")
+		}
 	}
 	if rl.Allow("a") {
 		t.Fatal("over the burst was allowed")

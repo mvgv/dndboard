@@ -20,6 +20,7 @@ const bodyLimit = 4 << 10
 //
 //	POST /register            {name, password}
 //	POST /login               {name, password}        -> {token}
+//	POST /logout
 //	GET  /adventures
 //	POST /campaigns           {adventure}             -> Campaign
 //	POST /campaigns/solo      {adventure}             (developer setting only)
@@ -44,6 +45,12 @@ func (l *Lobby) Handler() http.Handler {
 		}
 		tok, err := l.Login(b.Name, b.Password)
 		reply(w, map[string]string{"token": tok}, err)
+	})
+	mux.HandleFunc("POST /logout", func(w http.ResponseWriter, r *http.Request) {
+		if tok, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok {
+			l.Logout(tok)
+		}
+		reply(w, nil, nil)
 	})
 	mux.HandleFunc("GET /adventures", l.authed(func(w http.ResponseWriter, r *http.Request, _ string) {
 		type adv struct {
@@ -193,6 +200,8 @@ func reply(w http.ResponseWriter, v any, err error) {
 		http.Error(w, "wrong name or password", http.StatusUnauthorized)
 	case errors.Is(err, ErrNoSuchCampaign):
 		http.Error(w, err.Error(), http.StatusNotFound)
+	case errors.Is(err, ErrTooManyCampaigns):
+		http.Error(w, err.Error(), http.StatusTooManyRequests)
 	case errors.Is(err, ErrSoloDisabled):
 		http.Error(w, err.Error(), http.StatusForbidden)
 	case err != nil:

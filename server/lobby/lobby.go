@@ -21,9 +21,10 @@ import (
 )
 
 var (
-	ErrUnauthenticated = errors.New("lobby: not logged in")
-	ErrNoSuchCampaign  = errors.New("lobby: no such Campaign")
-	ErrSoloDisabled    = errors.New("lobby: solo mode is a developer setting and is off")
+	ErrUnauthenticated  = errors.New("lobby: not logged in")
+	ErrNoSuchCampaign   = errors.New("lobby: no such Campaign")
+	ErrSoloDisabled     = errors.New("lobby: solo mode is a developer setting and is off")
+	ErrTooManyCampaigns = errors.New("lobby: you have created as many Campaigns as allowed")
 )
 
 const (
@@ -81,6 +82,15 @@ type Config struct {
 	Dev bool
 	// OnStart is called, outside the lobby's lock, when a Campaign starts.
 	OnStart func(Campaign)
+	// MaxCampaigns is how many Campaigns one Player may create (0: 5).
+	MaxCampaigns int
+}
+
+func (c Config) maxCampaigns() int {
+	if c.MaxCampaigns > 0 {
+		return c.MaxCampaigns
+	}
+	return 5
 }
 
 type campaign struct {
@@ -249,6 +259,16 @@ func (l *Lobby) create(creator, adventure string) (*campaign, error) {
 	if !ok {
 		return nil, fmt.Errorf("lobby: no Adventure %q is loaded", adventure)
 	}
+	// Campaigns do not end yet (#15), so each Player may create only so many.
+	n := 0
+	for _, c := range l.campaigns {
+		if c.Creator == creator {
+			n++
+		}
+	}
+	if n >= l.cfg.maxCampaigns() {
+		return nil, ErrTooManyCampaigns
+	}
 	id, err := randomHex(8)
 	if err != nil {
 		return nil, err
@@ -412,23 +432,19 @@ func (l *Lobby) Ready(id, player string) error {
 }
 
 func (l *Lobby) complete(c *campaign) bool {
+	if len(c.Owners) != len(l.adventures[c.Adventure].Characters) {
+		return false
+	}
+	controlling := map[string]bool{}
+	for _, p := range c.Owners {
+		controlling[p] = true
+	}
 	for _, p := range c.Players {
-		if !c.ready[p] {
-			return false
-		}
-		if !slices.Contains(ownerValues(c.Owners), p) {
+		if !c.ready[p] || !controlling[p] {
 			return false
 		}
 	}
-	return len(c.Owners) == len(l.adventures[c.Adventure].Characters)
-}
-
-func ownerValues(m map[string]string) []string {
-	out := make([]string, 0, len(m))
-	for _, v := range m {
-		out = append(out, v)
-	}
-	return out
+	return true
 }
 
 func (l *Lobby) started(c Campaign) {
