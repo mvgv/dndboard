@@ -2,6 +2,7 @@ package game_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -141,8 +142,12 @@ func TestTablesAreBounded(t *testing.T) {
 	}
 
 	games = game.New(game.Config{NewTable: newTable, Max: 1})
-	games.Start(lobby.Campaign{ID: "one"})
-	games.Start(lobby.Campaign{ID: "two"})
+	if err := games.Start(lobby.Campaign{ID: "one"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := games.Start(lobby.Campaign{ID: "two"}); !errors.Is(err, game.ErrFull) {
+		t.Fatalf("second table: %v", err)
+	}
 	if games.Running() != 1 {
 		t.Fatalf("running = %d with Max 1", games.Running())
 	}

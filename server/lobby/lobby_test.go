@@ -18,7 +18,7 @@ func newLobby(t *testing.T, dev bool) (*lobby.Lobby, *[]lobby.Campaign) {
 	l := lobby.New(lobby.Config{
 		Adventures: []lobby.Adventure{adventure},
 		Dev:        dev,
-		OnStart:    func(c lobby.Campaign) { started = append(started, c) },
+		OnStart:    func(c lobby.Campaign) error { started = append(started, c); return nil },
 	})
 	return l, &started
 }
@@ -248,6 +248,80 @@ func TestChatReachesEveryPlayerInTheCampaign(t *testing.T) {
 		if err := l.Chat(c.ID, "ana", bad); err == nil {
 			t.Fatalf("accepted chat of %d bytes", len(bad))
 		}
+	}
+}
+
+// AC: solo mode is available only behind a developer setting, however the lone
+// Player gets there.
+func TestALonePlayerCannotStartWithoutTheDeveloperSetting(t *testing.T) {
+	for _, dev := range []bool{false, true} {
+		l, started := newLobby(t, dev)
+		c, _ := l.Create("ana", "goblins")
+		for _, pc := range adventure.Characters {
+			l.Claim(c.ID, "ana", pc)
+		}
+		if err := l.Ready(c.ID, "ana"); err != nil {
+			t.Fatal(err)
+		}
+		if got := len(*started) == 1; got != dev {
+			t.Fatalf("dev %v: started = %v", dev, got)
+		}
+	}
+}
+
+// If the game cannot open, the Campaign goes back to gathering and its invite
+// code works again.
+func TestAFailedStartKeepsTheCampaignGathering(t *testing.T) {
+	fail := true
+	l := lobby.New(lobby.Config{
+		Adventures: []lobby.Adventure{adventure},
+		Dev:        true,
+		OnStart: func(lobby.Campaign) error {
+			if fail {
+				return errors.New("full")
+			}
+			return nil
+		},
+	})
+	c, _ := l.Create("ana", "goblins")
+	l.Join(c.Invite, "bo")
+	for _, cl := range [][2]string{{"ana", "pc-1"}, {"ana", "pc-2"}, {"bo", "pc-3"}} {
+		l.Claim(c.ID, cl[0], cl[1])
+	}
+	l.Ready(c.ID, "ana")
+	if err := l.Ready(c.ID, "bo"); err == nil {
+		t.Fatal("a failed start reported success")
+	}
+	got, _ := l.Campaign(c.ID, "ana")
+	if got.State != lobby.Gathering || len(got.Ready) != 0 {
+		t.Fatalf("after a failed start: %+v", got)
+	}
+	if _, err := l.Join(c.Invite, "cy"); err != nil {
+		t.Fatalf("the invite code stopped working: %v", err)
+	}
+	if _, err := l.Solo("ana", "goblins"); err == nil {
+		t.Fatal("a failed solo start reported success")
+	}
+	// cy joined, so readiness was withdrawn again; with the game available the
+	// Party can start once cy has no character to wait for.
+	fail = false
+	l.Ready(c.ID, "ana")
+	l.Ready(c.ID, "bo")
+	if got, _ := l.Campaign(c.ID, "ana"); got.State != lobby.Gathering {
+		t.Fatalf("started with a Player who controls no character: %+v", got)
+	}
+}
+
+// Accounts live in memory, so only so many may register.
+func TestAccountsAreLimited(t *testing.T) {
+	l := lobby.New(lobby.Config{MaxAccounts: 2})
+	for _, n := range []string{"ana", "bo"} {
+		if err := l.Register(n, "correct horse"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := l.Register("cy", "correct horse"); !errors.Is(err, lobby.ErrTooManyAccounts) {
+		t.Fatalf("third account: %v", err)
 	}
 }
 

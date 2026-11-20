@@ -85,7 +85,7 @@ A Player taking control of a Player Character before the Campaign starts. A Play
 _Avoid_: assign (as the Player's act), pick
 
 **Ready**:
-A Player's confirmation that the Party is as they want it. The Campaign starts when every Player is ready, every Player Character is claimed and every Player controls at least one.
+A Player's confirmation that the Party is as they want it. The Campaign starts when every Player is ready, every Player Character is claimed, every Player controls at least one, and there are at least two Players (a lone Player is Solo mode).
 _Avoid_: confirmed, accepted
 
 **Solo mode**:

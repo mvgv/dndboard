@@ -5,6 +5,8 @@ package game
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"sync"
@@ -14,6 +16,9 @@ import (
 	"github.com/mvgv/dndboard/server/table"
 	"github.com/mvgv/dndboard/server/ws"
 )
+
+// ErrFull is Start's error when Config.Max tables are already running.
+var ErrFull = errors.New("the server is running as many games as it can; try again later")
 
 // Authenticator names the Player making a request.
 type Authenticator interface {
@@ -59,23 +64,23 @@ func New(cfg Config) *Games {
 // Start opens the table of a Campaign that has just started. Its Reaction
 // Prompts time out in real time until Lifetime ends, when the table is closed
 // and forgotten.
-func (g *Games) Start(c lobby.Campaign) {
-	g.mu.Lock()
-	full := len(g.by) >= g.cfg.Max
-	g.mu.Unlock()
-	if full {
-		log.Printf("game: Campaign %s not started: %d tables are running", c.ID, g.cfg.Max)
-		return
-	}
+//
+// It fails, so the lobby can keep the Campaign gathering, when Max tables are
+// running or the table cannot be built.
+func (g *Games) Start(c lobby.Campaign) error {
 	tb, err := g.cfg.NewTable(c)
 	if err != nil {
 		log.Printf("game: starting Campaign %s: %v", c.ID, err)
-		return
+		return fmt.Errorf("the game could not be started")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), g.cfg.Lifetime)
 	g.mu.Lock()
+	if len(g.by) >= g.cfg.Max {
+		g.mu.Unlock()
+		return ErrFull
+	}
 	g.by[c.ID] = running{tb: tb, owners: c.Owners}
 	g.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), g.cfg.Lifetime)
 	go func() {
 		defer cancel()
 		tb.Run(ctx, time.Second)
@@ -83,6 +88,7 @@ func (g *Games) Start(c lobby.Campaign) {
 		delete(g.by, c.ID)
 		g.mu.Unlock()
 	}()
+	return nil
 }
 
 // Running is how many tables are open.

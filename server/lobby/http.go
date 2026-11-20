@@ -200,7 +200,7 @@ func reply(w http.ResponseWriter, v any, err error) {
 		http.Error(w, "wrong name or password", http.StatusUnauthorized)
 	case errors.Is(err, ErrNoSuchCampaign):
 		http.Error(w, err.Error(), http.StatusNotFound)
-	case errors.Is(err, ErrTooManyCampaigns):
+	case errors.Is(err, ErrTooManyCampaigns), errors.Is(err, ErrTooManyAccounts):
 		http.Error(w, err.Error(), http.StatusTooManyRequests)
 	case errors.Is(err, ErrSoloDisabled):
 		http.Error(w, err.Error(), http.StatusForbidden)

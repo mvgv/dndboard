@@ -7,6 +7,7 @@
 package lobby
 
 import (
+	"cmp"
 	"crypto/pbkdf2"
 	"crypto/rand"
 	"crypto/sha256"
@@ -24,6 +25,7 @@ var (
 	ErrUnauthenticated  = errors.New("lobby: not logged in")
 	ErrNoSuchCampaign   = errors.New("lobby: no such Campaign")
 	ErrSoloDisabled     = errors.New("lobby: solo mode is a developer setting and is off")
+	ErrTooManyAccounts  = errors.New("lobby: no more accounts can be registered")
 	ErrTooManyCampaigns = errors.New("lobby: you have created as many Campaigns as allowed")
 )
 
@@ -80,8 +82,12 @@ type Config struct {
 	Adventures []Adventure
 	// Dev turns on solo mode; it is off unless a developer sets it.
 	Dev bool
-	// OnStart is called, outside the lobby's lock, when a Campaign starts.
-	OnStart func(Campaign)
+	// OnStart is called, outside the lobby's lock, when a Campaign starts. If
+	// it fails, the Campaign goes back to Gathering (a solo one is dropped)
+	// and the error reaches the Player whose action started it.
+	OnStart func(Campaign) error
+	// MaxAccounts bounds registered accounts, which live in memory (0: 1000).
+	MaxAccounts int
 	// MaxCampaigns is how many Campaigns one Player may create (0: 5).
 	MaxCampaigns int
 }
@@ -167,6 +173,9 @@ func (l *Lobby) Register(name, password string) error {
 	defer l.mu.Unlock()
 	if _, ok := l.accounts[name]; ok {
 		return fmt.Errorf("lobby: the name %q is taken", name)
+	}
+	if limit := cmp.Or(l.cfg.MaxAccounts, 1000); len(l.accounts) >= limit {
+		return ErrTooManyAccounts
 	}
 	l.accounts[name] = account{salt: salt, hash: h}
 	return nil
@@ -319,7 +328,12 @@ func (l *Lobby) Solo(player, adventure string) (Campaign, error) {
 	delete(l.invites, c.Invite) // nobody joins a solo Campaign
 	snap := c.snapshot()
 	l.mu.Unlock()
-	l.started(snap)
+	if err := l.started(snap); err != nil {
+		l.mu.Lock()
+		delete(l.campaigns, c.ID)
+		l.mu.Unlock()
+		return Campaign{}, err
+	}
 	return snap, nil
 }
 
@@ -427,12 +441,24 @@ func (l *Lobby) Ready(id, player string) error {
 	delete(l.invites, c.Invite)
 	snap := c.snapshot()
 	l.mu.Unlock()
-	l.started(snap)
+	if err := l.started(snap); err != nil {
+		// The game could not open: the Players stay in the lobby and may try again.
+		l.mu.Lock()
+		c.State = Gathering
+		l.invites[c.Invite] = c.ID
+		clear(c.ready)
+		l.mu.Unlock()
+		return err
+	}
 	return nil
 }
 
 func (l *Lobby) complete(c *campaign) bool {
 	if len(c.Owners) != len(l.adventures[c.Adventure].Characters) {
+		return false
+	}
+	// One Player alone is Solo mode, which only the developer setting allows.
+	if len(c.Players) < 2 && !l.cfg.Dev {
 		return false
 	}
 	controlling := map[string]bool{}
@@ -447,10 +473,11 @@ func (l *Lobby) complete(c *campaign) bool {
 	return true
 }
 
-func (l *Lobby) started(c Campaign) {
+func (l *Lobby) started(c Campaign) error {
 	if l.cfg.OnStart != nil {
-		l.cfg.OnStart(c)
+		return l.cfg.OnStart(c)
 	}
+	return nil
 }
 
 // ---- chat ----
