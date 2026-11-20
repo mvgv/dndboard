@@ -45,7 +45,7 @@ func serve(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(ws.Handler(tb))
+	srv := httptest.NewServer(ws.Handler(tb, nil))
 	t.Cleanup(srv.Close)
 	return "ws" + strings.TrimPrefix(srv.URL, "http")
 }
@@ -141,4 +141,41 @@ func TestBadMessagesAreRejectedToTheSenderOnly(t *testing.T) {
 	if u := read(t, b); u.Type != "update" {
 		t.Fatalf("b got %+v, want the update", u)
 	}
+}
+
+// AC: an unauthenticated client can't join the table.
+func TestAuthorizerGatesTheTable(t *testing.T) {
+	f := srd.Fighter()
+	f.ID, f.Pos, f.PlayerCharacter = "fighter", board.Pos{X: 1, Y: 1}, true
+	g := srd.GoblinWarrior()
+	g.ID, g.Pos = "goblin", board.Pos{X: 5, Y: 1}
+	tb, err := table.New(table.Config{
+		Rows:      []string{"#######", "#.....#", "#.....#", "#######"},
+		Creatures: []session.CreatureSpec{f, g},
+		Dice:      dice.Fixed(20, 1),
+		Brain:     passive{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(ws.Handler(tb, func(r *http.Request, pc string) bool {
+		return r.Header.Get("Authorization") == "Bearer good"
+	}))
+	defer srv.Close()
+	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "?pc=fighter"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if c, resp, err := websocket.Dial(ctx, url, nil); err == nil {
+		c.CloseNow()
+		t.Fatal("an unauthenticated client joined")
+	} else if resp == nil || resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("dial: %v, %v", resp, err)
+	}
+	h := http.Header{"Authorization": {"Bearer good"}}
+	c, _, err := websocket.Dial(ctx, url, &websocket.DialOptions{HTTPHeader: h})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.CloseNow()
 }

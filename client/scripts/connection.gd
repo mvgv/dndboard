@@ -11,9 +11,12 @@ var _peer := WebSocketPeer.new()
 var _state := WebSocketPeer.STATE_CLOSED
 
 
-func connect_to(url: String) -> Error:
+## `token` is the session token from login; it travels in a header, not the URL.
+func connect_to(url: String, token := "") -> Error:
 	_peer = WebSocketPeer.new()
 	_peer.inbound_buffer_size = 1 << 20
+	if token != "":
+		_peer.handshake_headers = PackedStringArray(["Authorization: Bearer " + token])
 	var err := _peer.connect_to_url(url)
 	if err == OK:
 		_state = WebSocketPeer.STATE_CONNECTING
