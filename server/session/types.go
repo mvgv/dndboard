@@ -315,6 +315,8 @@ const (
 	// AwaitingReaction: the game is paused until the pending prompt is answered.
 	AwaitingReaction
 	NoPendingReaction
+	// NotExploring: the exploration has ended and combat has begun.
+	NotExploring
 )
 
 func (c Code) String() string {
@@ -343,6 +345,8 @@ func (c Code) String() string {
 		return "AwaitingReaction"
 	case NoPendingReaction:
 		return "NoPendingReaction"
+	case NotExploring:
+		return "NotExploring"
 	}
 	return fmt.Sprintf("Code(%d)", int(c))
 }
