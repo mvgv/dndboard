@@ -84,6 +84,10 @@ _Avoid_: options, moves (for the whole set)
 The order of turns in a combat, set once when everyone rolls a Dexterity check and then repeated every round. Ties keep the order the caller listed the creatures, standing in for the GM's (and players') choice.
 _Avoid_: turn order (as the rule name)
 
+**Exploration**:
+Play outside combat: there are no turns and Player Characters move freely and at the same time. When opposing creatures come into each other's perception range with a clear line, each makes a Dexterity (Stealth) check against the other side's passive Perception; a creature that notices none of the opponents it met is **Surprised** (Disadvantage on its Initiative roll). Exploration then ends with a CombatStarted event and the combat begins.
+_Avoid_: free roam, out-of-combat mode
+
 **Action Economy**:
 What a creature may spend on its turn: its movement (splittable around anything else), one action, one Bonus Action, and one Reaction that is regained at the start of its own turn.
 _Avoid_: AP, action points
