@@ -44,8 +44,11 @@ const (
 
 // CreatureSpec is a creature placed on the Board when the session starts.
 type CreatureSpec struct {
-	ID            ID
-	Name          string
+	ID   ID
+	Name string
+	// Type is the creature type, such as Humanoid or Fey (SRD "Monsters",
+	// Creature Type).
+	Type          string
 	Team          Team
 	Pos           board.Pos
 	AC            int
@@ -544,6 +547,7 @@ func (CombatEnded) event()      {}
 // CreatureState is what everyone sees of a creature.
 type CreatureState struct {
 	Name  string
+	Type  string
 	Team  Team
 	Pos   board.Pos
 	HP    int

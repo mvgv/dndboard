@@ -11,14 +11,22 @@ import (
 	"github.com/mvgv/dndboard/server/session"
 )
 
-// Fighter is the level 1 Fighter stat block (id "fighter-1"), on the party team.
-func Fighter() session.CreatureSpec { return mustCreature("fighter-1", "party") }
+// Fighter is the level 1 Fighter stat block (id "fighter-1"), on the party
+// team. It is Humanoid, the creature type of every species in SRD 5.2
+// "Character Origins".
+func Fighter() session.CreatureSpec {
+	f := mustCreature("fighter-1", "party")
+	f.Type = "Humanoid"
+	return f
+}
 
 // GoblinWarrior is the SRD Goblin Warrior stat block, on the monsters team. Its
-// Bonus Action, Nimble Escape (SRD 5.2 "Monsters", Goblin Warrior), is set here
-// because the content format does not carry traits yet.
+// creature type, Fey, and its Bonus Action, Nimble Escape (SRD 5.2 "Monsters",
+// Goblin Warrior), are set here because the content format does not carry
+// creature types or traits yet.
 func GoblinWarrior() session.CreatureSpec {
 	g := mustCreature("goblin-warrior", "monsters")
+	g.Type = "Fey"
 	g.NimbleEscape = true // Disengage; Hide is not modeled yet
 	return g
 }
