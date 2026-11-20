@@ -1,6 +1,7 @@
 // Command dndboard serves one cooperative combat on a hand-built Board to the
-// Godot client over WebSocket: two Fighters, played by whoever connects,
-// against three Goblin Warriors.
+// Godot client over WebSocket: two Fighters, each played by the client that
+// connects as it (ws://host/play?pc=fighter-1 or ?pc=fighter-2), against three
+// Goblin Warriors run by the deterministic tactical brain.
 //
 // There is no login yet (#14), so it listens on localhost by default.
 package main
@@ -18,6 +19,7 @@ import (
 	"github.com/mvgv/dndboard/server/session"
 	"github.com/mvgv/dndboard/server/srd"
 	"github.com/mvgv/dndboard/server/table"
+	"github.com/mvgv/dndboard/server/tactics"
 	"github.com/mvgv/dndboard/server/ws"
 )
 
@@ -41,11 +43,12 @@ func main() {
 		*seed = uint64(time.Now().UnixNano())
 	}
 
+	cs := creatures()
 	tb, err := table.New(table.Config{
 		Rows:      arena,
-		Creatures: creatures(),
+		Creatures: cs,
 		Seed:      *seed,
-		Brain:     table.Approach{},
+		Brain:     tactics.NewUtility(cs, nil), // every goblin Balanced
 	})
 	if err != nil {
 		log.Fatal(err)

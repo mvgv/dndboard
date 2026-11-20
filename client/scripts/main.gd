@@ -3,10 +3,11 @@ extends Node3D
 ## the server's state, highlights the server's legal actions, plays the
 ## server's events (dice included) and sends back the intent the Player picks.
 ##
-## Run with `godot --path client -- --server=ws://host:port/play` to connect
+## Each client plays one Player Character, named in the address:
+## `godot --path client -- --server=ws://host:port/play?pc=fighter-1` connects
 ## on start; otherwise enter the address in the HUD.
 
-const DEFAULT_URL := "ws://127.0.0.1:8080/play"
+const DEFAULT_URL := "ws://127.0.0.1:8080/play?pc=fighter-1"
 const NO_SQUARE := Vector2i(-1, -1)
 
 var _conn := Connection.new()
@@ -113,6 +114,10 @@ func _handle(m: Dictionary) -> void:
 		"update":
 			_waiting = false
 			_set_legal({})
+			# Learn the names of creatures that just came into view first, so the
+			# events below can name them.
+			for c: Dictionary in m["state"]["creatures"]:
+				_names[str(c["id"])] = str(c["name"])
 			for e: Dictionary in m.get("events", []):
 				await _play(e)
 			_apply(m)
@@ -137,11 +142,15 @@ func _welcome(m: Dictionary) -> void:
 	_apply(m)
 
 
-## Takes the server's state and legal actions as the truth.
+## Takes the server's View and legal actions as the truth. The View holds only
+## what this client's Player Character perceives: a creature missing from it
+## is hidden, not removed, since it may come back into sight.
 func _apply(m: Dictionary) -> void:
 	var state: Dictionary = m["state"]
+	var in_view := {}
 	for c: Dictionary in state["creatures"]:
 		var id := str(c["id"])
+		in_view[id] = true
 		_names[id] = str(c["name"])
 		if not _standees.has(id):
 			var s := Standee.new()
@@ -150,16 +159,23 @@ func _apply(m: Dictionary) -> void:
 			_standees[id] = s
 		else:
 			_standees[id].apply(c)
+	for id: String in _standees:
+		if not in_view.has(id):
+			_standees[id].visible = false
+	var viewer := str(state.get("viewer", ""))
+	var active := str(state.get("active", ""))
 	var pending: Dictionary = state.get("pending", {})
 	if not pending.is_empty():
 		# Answering Reaction Prompts from the client comes with #16.
-		_hud.set_turn("Aguardando a reação de %s (%d s)" % [_name(str(pending["creature"])), int(pending["remaining_s"])])
+		_hud.set_turn("Aguardando a sua reação (%d s)" % int(pending["remaining_s"]))
 	elif bool(state.get("over", false)):
 		_hud.set_turn("Combate encerrado: vitória de %s" % _team_name(str(state.get("winner", ""))))
+	elif active == viewer:
+		_hud.set_turn("Rodada %d: sua vez (%s)" % [int(state["round"]), _name(viewer)])
+	elif active == "":
+		_hud.set_turn("Rodada %d: vez de alguém fora de vista" % int(state["round"]))
 	else:
-		var who := _name(str(state["active"]))
-		var whose := "" if m.has("legal") else " (monstro)"
-		_hud.set_turn("Rodada %d: vez de %s%s" % [int(state["round"]), who, whose])
+		_hud.set_turn("Rodada %d: vez de %s" % [int(state["round"]), _name(active)])
 	_set_legal(m.get("legal", {}))
 
 

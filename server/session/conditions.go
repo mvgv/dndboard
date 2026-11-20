@@ -388,7 +388,8 @@ func (s *Session) save(t *creature, e SavingThrow) SaveRolled {
 		}
 	}
 	dis := e.Ability == Dexterity && t.has(CondRestrained)
-	r.D20, r.Mode = s.rollD20(false, dis)
+	// Dodge: Advantage on Dexterity saving throws (SRD "Rules Glossary", Dodge).
+	r.D20, r.Mode = s.rollD20(e.Ability == Dexterity && t.dodgeActive(), dis)
 	r.Total = r.D20 + r.Modifier
 	r.Success = r.Total >= e.DC
 	return r

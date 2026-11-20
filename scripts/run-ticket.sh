@@ -41,7 +41,7 @@ MAX_FEEDBACK=${MAX_FEEDBACK:-3}
 
 MAIN=$(git -C "$(dirname "$0")" worktree list --porcelain | awk '/^worktree /{print $2; exit}')
 WS=$(dirname "$MAIN")
-mkdir -p "$WS/logs" "$WS/wt"
+mkdir -p "$WS/logs" "$WS/wt" "$WS/state"
 LOG=$WS/logs/ticket-$N.log
 
 if [[ $DETACH == 1 ]]; then
@@ -66,8 +66,17 @@ give_up() {
   set_labels --remove-label in-progress --add-label needs-human
   gh issue comment "$N" -R "$REPO" --body "$1 Branch \`$BRANCH\`; see \`logs/ticket-$N.log\` on the VPS." >/dev/null
   log "$1 Labeled needs-human."
+  # Forget the conductor's once-per-commit actions for this PR, so that when the
+  # owner removes needs-human the conductor sends its feedback again.
+  local pr
+  pr=$(gh pr list -R "$REPO" --head "$BRANCH" --state open --json number --jq '.[0].number // empty' 2>/dev/null || true)
+  [[ -n $pr ]] && rm -f "$WS"/state/*-pr"$pr"-*
+  rm -f "$(git -C "$WT" rev-parse --git-dir 2>/dev/null)/run-ticket-feedback-rounds" 2>/dev/null || true
   exit 1
 }
+LIMIT_RE="hit your .*limit|usage limit reached"
+limited() { tail -n 20 "$1" | grep -qiE "$LIMIT_RE"; }
+mark_limited() { touch "$WS/state/usage-limited"; log "Usage limit hit; marked $WS/state/usage-limited."; }
 
 title=$(gh issue view "$N" -R "$REPO" --json title -q .title)
 slug=$(printf '%s' "$title" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//' | cut -c1-40 | sed -E 's/-+$//')
@@ -83,16 +92,29 @@ if [[ -n $FEEDBACK_FILE ]]; then
   [[ -d $WT ]] || { log "No worktree $WT for #$N; cannot resume."; exit 1; }
   cd "$WT"
   rounds_file=$(git rev-parse --git-dir)/run-ticket-feedback-rounds
-  rounds=$(( $(cat "$rounds_file" 2>/dev/null || echo 0) + 1 ))
-  echo "$rounds" > "$rounds_file"
-  (( rounds <= MAX_FEEDBACK )) || give_up "Feedback round $rounds exceeds $MAX_FEEDBACK without converging."
-  log "Feedback round $rounds/$MAX_FEEDBACK on #$N (model $MODEL)"
-  set +e
-  claude --model "$MODEL" --continue -p "$(cat "$FEEDBACK_FILE")" 2>&1 | tee -a "$LOG"
-  status=${PIPESTATUS[0]}
-  set -e
-  log "Claude exited with status $status"
-  rm -f "$FEEDBACK_FILE"
+  if grep -q '^KIND: conflict$' "$FEEDBACK_FILE"; then
+    rounds=$(cat "$rounds_file" 2>/dev/null || echo 0)
+    log "Conflict resolution on #$N (not counted as a feedback round; model $MODEL)"
+  else
+    rounds=$(( $(cat "$rounds_file" 2>/dev/null || echo 0) + 1 ))
+    (( rounds <= MAX_FEEDBACK )) || give_up "Feedback round $rounds exceeds $MAX_FEEDBACK without converging."
+    log "Feedback round $rounds/$MAX_FEEDBACK on #$N (model $MODEL)"
+  fi
+  RUN_OUT=$(mktemp)
+  for ((i = 1; i <= MAX_ATTEMPTS; i++)); do
+    set +e
+    claude --model "$MODEL" --continue -p "$(grep -v '^KIND: ' "$FEEDBACK_FILE")" 2>&1 | tee "$RUN_OUT" | tee -a "$LOG"
+    status=${PIPESTATUS[0]}
+    set -e
+    log "Claude exited with status $status"
+    limited "$RUN_OUT" || break
+    mark_limited
+    (( i < MAX_ATTEMPTS )) || give_up "Usage limit still hit after $MAX_ATTEMPTS feedback attempts."
+    log "Waiting $WAIT_MIN minutes before retrying the feedback."
+    sleep $((WAIT_MIN * 60))
+  done
+  grep -q '^KIND: conflict$' "$FEEDBACK_FILE" || echo "$rounds" > "$rounds_file"
+  rm -f "$FEEDBACK_FILE" "$RUN_OUT"
   exit 0
 fi
 
@@ -131,10 +153,13 @@ for ((i = 1; i <= MAX_ATTEMPTS; i++)); do
   fi
   log "Attempt $i/$MAX_ATTEMPTS on #$N (model $MODEL)"
   set +e
-  claude --model "$MODEL" "${args[@]}" 2>&1 | tee -a "$LOG"
+  RUN_OUT=$(mktemp)
+  claude --model "$MODEL" "${args[@]}" 2>&1 | tee "$RUN_OUT" | tee -a "$LOG"
   status=${PIPESTATUS[0]}
   set -e
   log "Claude exited with status $status"
+  limited "$RUN_OUT" && mark_limited
+  rm -f "$RUN_OUT"
 
   has_pr && break
   if has_label needs-human; then

@@ -1,6 +1,8 @@
 package table
 
 import (
+	"slices"
+
 	"github.com/mvgv/dndboard/server/session"
 )
 
@@ -9,19 +11,21 @@ import (
 
 // Message is sent from the server to clients.
 //
-//   - "welcome": to a client that joins: the Board, the events so far, the
-//     visible state and legal actions.
-//   - "update": to every client after an intent resolves: the new events,
-//     the visible state and legal actions.
+// Each client plays one Player Character and gets only what it perceives.
+//
+//   - "welcome": to a client that joins: the Board, the events its character
+//     perceived so far, its View and Legal Actions.
+//   - "update": to every client after an intent resolves or a Reaction Prompt
+//     times out: the new events its character perceived, its View and Legal
+//     Actions.
 //   - "rejected": only to the client whose intent or message was refused.
 type Message struct {
 	Type   string  `json:"type"`
 	Board  *Board  `json:"board,omitempty"`
 	Events []Event `json:"events,omitempty"`
 	State  *State  `json:"state,omitempty"`
-	// Legal is the active creature's legal actions, present only while a
-	// Player Character is active, the combat goes on and no Reaction Prompt
-	// is pending.
+	// Legal is the client's Player Character's Legal Actions, present only on
+	// its turn, while the combat goes on and no Reaction Prompt is pending.
 	Legal  *Legal `json:"legal,omitempty"`
 	Code   string `json:"code,omitempty"`
 	Reason string `json:"reason,omitempty"`
@@ -65,15 +69,20 @@ type Creature struct {
 	Gone            bool     `json:"gone"`
 }
 
-// State is the visible state of the combat.
+// State is one Player Character's View of the combat (Glossary, View): only
+// the creatures it perceives, sorted by ID. There is no turn order: it would
+// name creatures the viewer does not perceive.
 type State struct {
-	Round     int        `json:"round"`
+	// Viewer is the Player Character this client plays.
+	Viewer string `json:"viewer"`
+	Round  int    `json:"round"`
+	// Active is whose turn it is, or empty while that creature is unseen.
 	Active    string     `json:"active"`
-	Order     []string   `json:"order"`
 	Creatures []Creature `json:"creatures"`
 	Over      bool       `json:"over"`
 	Winner    string     `json:"winner,omitempty"`
-	// Pending is the Reaction Prompt the game is paused on, if any.
+	// Pending is the Reaction Prompt the game is paused on, sent only to the
+	// client whose Player Character is asked.
 	Pending *Pending `json:"pending,omitempty"`
 }
 
@@ -348,15 +357,25 @@ func d20Test(typ string, who session.ID, ab session.Ability, d20, mod, total, dc
 	return w
 }
 
-func wireState(st session.State, pc func(session.ID) bool) *State {
-	w := &State{Round: st.Round, Active: string(st.Active), Over: st.Over, Winner: string(st.Winner)}
-	if p := st.Pending; p != nil {
-		w.Pending = &Pending{Creature: string(p.Creature), Target: string(p.Target),
-			RemainingS: int(p.Remaining.Seconds())}
+// wireView flattens a View. pending is the session's Reaction Prompt, if any:
+// it is shown only to the creature asked, naming its target only when the
+// viewer perceives it.
+func wireView(v session.View, pending *session.PendingReaction, pc func(session.ID) bool) *State {
+	w := &State{Viewer: string(v.Viewer), Round: v.Round, Active: string(v.Active),
+		Over: v.Over, Winner: string(v.Winner), Creatures: []Creature{}}
+	if p := pending; p != nil && p.Creature == v.Viewer {
+		w.Pending = &Pending{Creature: string(p.Creature), RemainingS: int(p.Remaining.Seconds())}
+		if _, seen := v.Creatures[p.Target]; seen {
+			w.Pending.Target = string(p.Target)
+		}
 	}
-	for _, id := range st.Order {
-		c := st.Creatures[id]
-		w.Order = append(w.Order, string(id))
+	ids := make([]session.ID, 0, len(v.Creatures))
+	for id := range v.Creatures {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	for _, id := range ids {
+		c := v.Creatures[id]
 		conds := make([]string, 0, len(c.Conditions))
 		for _, k := range c.Conditions {
 			conds = append(conds, string(k))

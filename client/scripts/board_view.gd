@@ -6,6 +6,7 @@ extends Node3D
 
 const FLOOR_COLOR := Color(0.55, 0.5, 0.42)
 const DIFFICULT_COLOR := Color(0.42, 0.47, 0.33)
+const OBSCURED_COLOR := Color(0.2, 0.2, 0.26)
 const WALL_COLOR := Color(0.3, 0.28, 0.3)
 const MOVE_COLOR := Color(0.25, 0.6, 1.0, 0.45)
 const TARGET_COLOR := Color(1.0, 0.25, 0.2, 0.55)
@@ -28,7 +29,8 @@ func _ready() -> void:
 	add_child(_hover)
 
 
-## Builds the terrain from text rows: '.' floor, '#' wall, '~' Difficult Terrain.
+## Builds the terrain from text rows: '.' floor, '#' wall, '~' Difficult
+## Terrain, '%' Heavily Obscured floor.
 func build(rows: Array) -> void:
 	for child in get_children():
 		if child != _highlights and child != _hover:
@@ -37,6 +39,7 @@ func build(rows: Array) -> void:
 	width = 0 if rows.is_empty() else str(rows[0]).length()
 	var floor_mat := _flat(FLOOR_COLOR)
 	var difficult_mat := _flat(DIFFICULT_COLOR)
+	var obscured_mat := _flat(OBSCURED_COLOR)
 	var wall_mat := _flat(WALL_COLOR)
 	var tile := BoxMesh.new()
 	tile.size = Vector3(0.98, 0.1, 0.98)
@@ -54,6 +57,10 @@ func build(rows: Array) -> void:
 				"~":
 					m.mesh = tile
 					m.material_override = difficult_mat
+					m.position = Vector3(x + 0.5, -0.05, y + 0.5)
+				"%":
+					m.mesh = tile
+					m.material_override = obscured_mat
 					m.position = Vector3(x + 0.5, -0.05, y + 0.5)
 				_:
 					m.mesh = tile

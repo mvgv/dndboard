@@ -12,6 +12,7 @@ import (
 	"github.com/mvgv/dndboard/server/session"
 	"github.com/mvgv/dndboard/server/srd"
 	"github.com/mvgv/dndboard/server/table"
+	"github.com/mvgv/dndboard/server/tactics"
 )
 
 // Hall: 11x3 floor inside walls.
@@ -44,19 +45,19 @@ type fakeBrain struct {
 	calls  int
 }
 
-func (b *fakeBrain) Choose(st session.State, _ session.LegalActions) session.Intent {
+func (b *fakeBrain) Choose(st session.State, _ session.LegalActions) (session.Intent, bool) {
 	b.calls++
 	if len(b.script) == 0 {
-		return session.EndTurn{Actor: st.Active}
+		return session.EndTurn{Actor: st.Active}, true
 	}
 	in := b.script[0]
 	b.script = b.script[1:]
-	return in
+	return in, true
 }
 
 // duel: the Fighter (a Player Character) at 1,2 against a Goblin Warrior at
 // 5,2. Initiative: fighter 20, goblin 1, so the Fighter goes first.
-func duel(t *testing.T, brain table.Brain, rolls ...int) *table.Table {
+func duel(t *testing.T, brain tactics.Brain, rolls ...int) *table.Table {
 	t.Helper()
 	tb, err := table.New(table.Config{
 		Rows:      hall,
@@ -93,9 +94,20 @@ func none(t *testing.T, ch <-chan table.Message) {
 	}
 }
 
+// join seats a client playing viewer.
+func join(t *testing.T, tb *table.Table, viewer string) (table.Message, <-chan table.Message, func()) {
+	t.Helper()
+	w, ch, leave, err := tb.Join(viewer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return w, ch, leave
+}
+
+// submit sends an intent from the client playing its actor.
 func submit(t *testing.T, tb *table.Table, in table.Intent) {
 	t.Helper()
-	if err := tb.Submit(in); err != nil {
+	if err := tb.Submit(in.Actor, in); err != nil {
 		t.Fatalf("%+v rejected: %v", in, err)
 	}
 }
@@ -123,7 +135,7 @@ func events(m table.Message, typ string) []table.Event {
 
 func TestWelcomeCarriesBoardStateAndLegalActions(t *testing.T) {
 	tb := duel(t, &fakeBrain{})
-	w, _, leave := tb.Join()
+	w, _, leave := join(t, tb, "fighter")
 	defer leave()
 
 	if w.Type != "welcome" || w.Board == nil || w.State == nil {
@@ -148,7 +160,7 @@ func TestWelcomeCarriesBoardStateAndLegalActions(t *testing.T) {
 // AC: reachable squares and valid targets come from the server's legal actions.
 func TestLegalActionsListReachableSquaresAndTargets(t *testing.T) {
 	tb := duel(t, &fakeBrain{})
-	w, ch, leave := tb.Join()
+	w, ch, leave := join(t, tb, "fighter")
 	defer leave()
 
 	// 30 ft of Speed in an open hall: every floor square within 6 squares,
@@ -180,10 +192,18 @@ func TestLegalActionsListReachableSquaresAndTargets(t *testing.T) {
 
 // AC: an intent resolves on the server and updates every connected client.
 func TestIntentUpdatesEveryConnectedClient(t *testing.T) {
-	tb := duel(t, &fakeBrain{})
-	_, a, leaveA := tb.Join()
+	tb, err := table.New(table.Config{
+		Rows:      hall,
+		Creatures: []session.CreatureSpec{fighter("fighter", 1, 2), fighter("ally", 1, 3), goblin("goblin", 5, 2)},
+		Dice:      dice.Fixed(20, 19, 1), // fighter, ally, goblin
+		Brain:     &fakeBrain{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, a, leaveA := join(t, tb, "fighter")
 	defer leaveA()
-	_, b, leaveB := tb.Join()
+	_, b, leaveB := join(t, tb, "ally")
 	defer leaveB()
 
 	submit(t, tb, table.Intent{Kind: "move", Actor: "fighter", To: &table.Square{X: 4, Y: 2}})
@@ -196,6 +216,78 @@ func TestIntentUpdatesEveryConnectedClient(t *testing.T) {
 		if f := creature(t, u.State, "fighter"); f.X != 4 || f.Y != 2 {
 			t.Fatalf("fighter after move = %+v", f)
 		}
+		// Only the client whose character's turn it is gets Legal Actions.
+		if mine := u.State.Viewer == "fighter"; (u.Legal != nil) != mine {
+			t.Fatalf("%s's client: legal %+v", u.State.Viewer, u.Legal)
+		}
+	}
+}
+
+// A client plays one Player Character: it acts only for that character, and
+// only a Player Character can be joined.
+func TestAClientActsOnlyForItsPlayerCharacter(t *testing.T) {
+	tb, err := table.New(table.Config{
+		Rows:      hall,
+		Creatures: []session.CreatureSpec{fighter("fighter", 1, 2), fighter("ally", 1, 3), goblin("goblin", 5, 2)},
+		Dice:      dice.Fixed(20, 19, 1),
+		Brain:     &fakeBrain{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range []string{"goblin", "nobody", ""} {
+		if _, _, _, err := tb.Join(v); err == nil {
+			t.Fatalf("joined as %q, which is not a Player Character", v)
+		}
+	}
+	_, ch, leave := join(t, tb, "ally")
+	defer leave()
+	var rej *session.Rejection
+	if err := tb.Submit("ally", table.Intent{Kind: "end_turn", Actor: "fighter"}); !errors.As(err, &rej) || rej.Code != session.NotYourTurn {
+		t.Fatalf("the ally's client ended the fighter's turn: %v", err)
+	}
+	none(t, ch)
+}
+
+// Each client gets only its Player Character's View (Glossary, View): a
+// monster behind a wall is not in its state, and the monster's moves out of
+// sight are not among its events.
+func TestAClientSeesOnlyWhatItsPlayerCharacterPerceives(t *testing.T) {
+	split := []string{
+		"#########",
+		"#...#...#",
+		"#########",
+	}
+	brain := &fakeBrain{script: []session.Intent{session.Move{Actor: "goblin", To: board.Pos{X: 6, Y: 1}}}}
+	tb, err := table.New(table.Config{
+		Rows:      split,
+		Creatures: []session.CreatureSpec{fighter("fighter", 1, 1), goblin("goblin", 7, 1)},
+		Dice:      dice.Fixed(20, 1),
+		Brain:     brain,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, ch, leave := join(t, tb, "fighter")
+	defer leave()
+	for _, c := range w.State.Creatures {
+		if c.ID == "goblin" {
+			t.Fatalf("the goblin behind the wall is in the fighter's view: %+v", c)
+		}
+	}
+	for _, e := range w.Events {
+		if e.Creature == "goblin" {
+			t.Fatalf("an event about the unseen goblin reached the fighter: %+v", e)
+		}
+	}
+
+	submit(t, tb, table.Intent{Kind: "end_turn", Actor: "fighter"})
+	u := next(t, ch)
+	if len(events(u, "moved")) != 0 || len(events(u, "turn_started")) != 1 {
+		t.Fatalf("events = %+v, want the fighter's own turn start and no goblin move", u.Events)
+	}
+	if len(u.State.Creatures) != 1 || u.State.Active != "fighter" {
+		t.Fatalf("state = %+v", u.State)
 	}
 }
 
@@ -224,10 +316,10 @@ func TestEveryIntentKindReachesTheSession(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, ch, leave := tb.Join()
+			_, ch, leave := join(t, tb, "fighter")
 			defer leave()
 
-			err = tb.Submit(table.Intent{Kind: tc.kind, Actor: "fighter"})
+			err = tb.Submit("fighter", table.Intent{Kind: tc.kind, Actor: "fighter"})
 			if tc.refusal != "" {
 				var rej *session.Rejection
 				if !errors.As(err, &rej) || !strings.Contains(rej.Reason, tc.refusal) {
@@ -247,18 +339,18 @@ func TestEveryIntentKindReachesTheSession(t *testing.T) {
 
 func TestRejectedIntentChangesNothingAndBroadcastsNothing(t *testing.T) {
 	tb := duel(t, &fakeBrain{})
-	_, ch, leave := tb.Join()
+	_, ch, leave := join(t, tb, "fighter")
 	defer leave()
 
 	for _, in := range []table.Intent{
 		{Kind: "move", Actor: "fighter", To: &table.Square{X: 9, Y: 2}}, // beyond Speed
 		{Kind: "attack", Actor: "fighter", Target: "goblin"},            // out of reach
-		{Kind: "end_turn", Actor: "goblin"},                             // a monster, not a Player Character
+		{Kind: "end_turn", Actor: "goblin"},                             // a monster, not this client's character
 		{Kind: "fly", Actor: "fighter"},                                 // unknown intent
 		{Kind: "move", Actor: "fighter"},                                // no square
 	} {
 		var rej *session.Rejection
-		if err := tb.Submit(in); !errors.As(err, &rej) || rej.Reason == "" {
+		if err := tb.Submit("fighter", in); !errors.As(err, &rej) || rej.Reason == "" {
 			t.Fatalf("%+v: want a Rejection with a reason, got %v", in, err)
 		}
 	}
@@ -274,7 +366,7 @@ func TestMonsterTurnsRunOnTheServer(t *testing.T) {
 	}}
 	// Goblin attack d20 15 (19 vs AC 16) hits; scimitar d6 3 + 2 = 5.
 	tb := duel(t, brain, 15, 3)
-	_, ch, leave := tb.Join()
+	_, ch, leave := join(t, tb, "fighter")
 	defer leave()
 
 	submit(t, tb, table.Intent{Kind: "end_turn", Actor: "fighter"})
@@ -296,7 +388,7 @@ func TestPlayerCharacterRollsAreShownAndMonsterRollsOnlyTheirResult(t *testing.T
 	// Fighter: d20 15 (20 vs AC 15) hits, longsword d8 5 + 3 = 8.
 	// Goblin: d20 15 (19 vs AC 16) hits, scimitar d6 3 + 2 = 5.
 	tb := duel(t, brain, 15, 5, 15, 3)
-	_, ch, leave := tb.Join()
+	_, ch, leave := join(t, tb, "fighter")
 	defer leave()
 
 	submit(t, tb, table.Intent{Kind: "move", Actor: "fighter", To: &table.Square{X: 4, Y: 2}})
@@ -330,7 +422,7 @@ func TestPlayerCharacterRollsAreShownAndMonsterRollsOnlyTheirResult(t *testing.T
 
 func TestMonsterInitiativeRollIsHidden(t *testing.T) {
 	tb := duel(t, &fakeBrain{})
-	w, _, leave := tb.Join()
+	w, _, leave := join(t, tb, "fighter")
 	defer leave()
 	for _, e := range events(w, "initiative_rolled") {
 		switch e.Creature {
@@ -352,7 +444,7 @@ func TestMonsterInitiativeRollIsHidden(t *testing.T) {
 func TestNoLegalActionsOnceCombatIsOver(t *testing.T) {
 	// Fighter: d20 20 is a Critical Hit, 2d8 8+8 + 3 = 19 downs the goblin.
 	tb := duel(t, &fakeBrain{}, 20, 8, 8)
-	_, ch, leave := tb.Join()
+	_, ch, leave := join(t, tb, "fighter")
 	defer leave()
 
 	submit(t, tb, table.Intent{Kind: "move", Actor: "fighter", To: &table.Square{X: 4, Y: 2}})
@@ -364,22 +456,63 @@ func TestNoLegalActionsOnceCombatIsOver(t *testing.T) {
 	}
 }
 
-func TestApproachBrainClosesInAndAttacks(t *testing.T) {
-	// Goblin: moves next to the fighter, then attacks: d20 15 (19 vs AC 16)
-	// hits, scimitar d6 3 + 2 = 5.
-	tb := duel(t, table.Approach{}, 15, 3)
-	_, ch, leave := tb.Join()
+// A brain's choice outside the Legal Actions is never submitted: the
+// creature's turn ends instead (tactics.Legal).
+func TestABrainChoiceOutsideTheLegalActionsEndsTheTurn(t *testing.T) {
+	brain := &fakeBrain{script: []session.Intent{session.Attack{Actor: "goblin", Target: "fighter"}}} // 4 squares away
+	tb := duel(t, brain)
+	_, ch, leave := join(t, tb, "fighter")
 	defer leave()
 
 	submit(t, tb, table.Intent{Kind: "end_turn", Actor: "fighter"})
 	u := next(t, ch)
-	mv := events(u, "moved")
-	if len(mv) != 1 || mv[0].Creature != "goblin" || mv[0].To.X != 2 {
-		t.Fatalf("goblin moves = %+v", mv)
+	if len(events(u, "attack_rolled")) != 0 || u.State.Active != "fighter" || u.State.Round != 2 {
+		t.Fatalf("after the goblin's turn: events %+v, active %q, round %d", u.Events, u.State.Active, u.State.Round)
 	}
-	if f := creature(t, u.State, "fighter"); f.HP != 7 || u.State.Active != "fighter" {
-		t.Fatalf("after the goblin's turn: %+v, active %q", f, u.State.Active)
+	if brain.calls != 1 {
+		t.Fatalf("brain asked %d times, want once", brain.calls)
 	}
+}
+
+// The deterministic tactical brain (#10) plays the monsters' turns.
+func TestTheTacticalBrainPlaysTheMonsters(t *testing.T) {
+	cs := []session.CreatureSpec{fighter("fighter", 1, 2), goblin("goblin", 5, 2)}
+	tb, err := table.New(table.Config{
+		Rows:      hall,
+		Creatures: cs,
+		Dice:      &thenSeeded{first: []int{20, 1}}, // the fighter goes first
+		Brain:     tactics.NewUtility(cs, nil),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, ch, leave := join(t, tb, "fighter")
+	defer leave()
+
+	submit(t, tb, table.Intent{Kind: "end_turn", Actor: "fighter"})
+	u := next(t, ch)
+	acted := len(events(u, "moved")) + len(events(u, "attack_rolled"))
+	if acted == 0 || u.State.Active != "fighter" || u.State.Round != 2 || u.Legal == nil {
+		t.Fatalf("after the goblin's turn: active %q, round %d, events %+v", u.State.Active, u.State.Round, u.Events)
+	}
+}
+
+// thenSeeded rolls its first values in order, then seeded dice.
+type thenSeeded struct {
+	first []int
+	rest  dice.Roller
+}
+
+func (r *thenSeeded) Roll(sides int) int {
+	if len(r.first) > 0 {
+		v := r.first[0]
+		r.first = r.first[1:]
+		return v
+	}
+	if r.rest == nil {
+		r.rest = dice.Seeded(1)
+	}
+	return r.rest.Roll(sides)
 }
 
 // A Reaction Prompt pauses the game: the table shows it and waits instead of
@@ -399,7 +532,7 @@ func TestReactionPromptPausesTheTableUntilItTimesOut(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w, ch, leave := tb.Join()
+	w, ch, leave := join(t, tb, "fighter")
 	defer leave()
 
 	p := events(w, "reaction_prompted")
@@ -455,7 +588,7 @@ func TestDyingPlayerCharacterCanBeStabilizedFromTheClient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, ch, leave := tb.Join()
+	_, ch, leave := join(t, tb, "b")
 	defer leave()
 
 	submit(t, tb, table.Intent{Kind: "end_turn", Actor: "a"})
@@ -486,36 +619,9 @@ func TestDyingPlayerCharacterCanBeStabilizedFromTheClient(t *testing.T) {
 	}
 }
 
-func TestApproachBrainPrefersAStandingTarget(t *testing.T) {
-	tb, err := table.New(table.Config{
-		Rows:      hall,
-		Creatures: []session.CreatureSpec{fighter("a", 1, 2), fighter("b", 1, 3), goblin("goblin", 2, 2)},
-		// Initiative: a 1, b 1, goblin 20: the goblin goes first.
-		// Round 1, goblin attacks a (listed first): d20 20 is a Critical Hit,
-		// 2d6 6+6 + 2 = 14 drops a to 0. a's Death Saving Throw: 10.
-		// Round 2, goblin attacks again: d20 1, a miss. a's Death Saving Throw: 10.
-		Dice:  dice.Fixed(1, 1, 20, 20, 6, 6, 10, 1, 10),
-		Brain: table.Approach{},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	w, ch, leave := tb.Join()
-	defer leave()
-	if a := creature(t, w.State, "a"); !a.Down || w.State.Active != "b" {
-		t.Fatalf("after round 1: a %+v, active %q", a, w.State.Active)
-	}
-
-	submit(t, tb, table.Intent{Kind: "end_turn", Actor: "b"})
-	atk := events(next(t, ch), "attack_rolled")
-	if len(atk) != 1 || atk[0].Target != "b" {
-		t.Fatalf("goblin attacks = %+v, want b, who is still standing", atk)
-	}
-}
-
 func TestLeftClientsGetNoUpdates(t *testing.T) {
 	tb := duel(t, &fakeBrain{})
-	_, ch, leave := tb.Join()
+	_, ch, leave := join(t, tb, "fighter")
 	leave()
 	submit(t, tb, table.Intent{Kind: "end_turn", Actor: "fighter"})
 	if _, ok := <-ch; ok {

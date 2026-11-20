@@ -2,6 +2,7 @@ package ws_test
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -18,17 +19,28 @@ import (
 	"github.com/mvgv/dndboard/server/ws"
 )
 
+// passive is a monster brain with no opinion: its creatures end their turns.
+type passive struct{}
+
+func (passive) Choose(session.State, session.LegalActions) (session.Intent, bool) { return nil, false }
+
+// serve starts a table with two Fighters (Player Characters) and a goblin,
+// and returns its WebSocket URL without the pc parameter.
 func serve(t *testing.T) string {
 	t.Helper()
-	f := srd.Fighter()
-	f.ID, f.Pos, f.PlayerCharacter = "fighter", board.Pos{X: 1, Y: 1}, true
+	var cs []session.CreatureSpec
+	for i, id := range []session.ID{"fighter", "ally"} {
+		f := srd.Fighter()
+		f.ID, f.Pos, f.PlayerCharacter = id, board.Pos{X: 1, Y: 1 + i}, true
+		cs = append(cs, f)
+	}
 	g := srd.GoblinWarrior()
 	g.ID, g.Pos = "goblin", board.Pos{X: 5, Y: 1}
 	tb, err := table.New(table.Config{
-		Rows:      []string{"#######", "#.....#", "#######"},
-		Creatures: []session.CreatureSpec{f, g},
-		Dice:      dice.Fixed(20, 1, 1), // the fighter goes first; the goblin's attack misses
-		Brain:     table.Approach{},
+		Rows:      []string{"#######", "#.....#", "#.....#", "#######"},
+		Creatures: append(cs, g),
+		Dice:      dice.Fixed(20, 19, 1), // fighter, ally, goblin
+		Brain:     passive{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -36,6 +48,22 @@ func serve(t *testing.T) string {
 	srv := httptest.NewServer(ws.Handler(tb))
 	t.Cleanup(srv.Close)
 	return "ws" + strings.TrimPrefix(srv.URL, "http")
+}
+
+func TestJoiningNeedsAPlayerCharacter(t *testing.T) {
+	url := serve(t)
+	for _, q := range []string{"", "?pc=goblin", "?pc=nobody"} {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		c, resp, err := websocket.Dial(ctx, url+q, nil)
+		cancel()
+		if err == nil {
+			c.CloseNow()
+			t.Fatalf("joined with %q", q)
+		}
+		if resp == nil || resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("%q: response %v, want 400", q, resp)
+		}
+	}
 }
 
 func dial(t *testing.T, url string) *websocket.Conn {
@@ -73,9 +101,9 @@ func send(t *testing.T, c *websocket.Conn, text string) {
 // AC: moving from a client resolves on the server and updates every client.
 func TestIntentOverWebSocketUpdatesEveryClient(t *testing.T) {
 	url := serve(t)
-	a, b := dial(t, url), dial(t, url)
+	a, b := dial(t, url+"?pc=fighter"), dial(t, url+"?pc=ally")
 	for _, c := range []*websocket.Conn{a, b} {
-		if w := read(t, c); w.Type != "welcome" || w.Board == nil || w.Legal == nil {
+		if w := read(t, c); w.Type != "welcome" || w.Board == nil || w.State == nil {
 			t.Fatalf("welcome = %+v", w)
 		}
 	}
@@ -91,7 +119,7 @@ func TestIntentOverWebSocketUpdatesEveryClient(t *testing.T) {
 
 func TestBadMessagesAreRejectedToTheSenderOnly(t *testing.T) {
 	url := serve(t)
-	a, b := dial(t, url), dial(t, url)
+	a, b := dial(t, url+"?pc=fighter"), dial(t, url+"?pc=ally")
 	read(t, a)
 	read(t, b)
 
@@ -99,6 +127,7 @@ func TestBadMessagesAreRejectedToTheSenderOnly(t *testing.T) {
 		`not json`:        "BadMessage",
 		`{"type":"chat"}`: "BadMessage",
 		`{"type":"intent","intent":"end_turn","actor":"goblin"}`:                  "NotYourTurn",
+		`{"type":"intent","intent":"end_turn","actor":"ally"}`:                    "NotYourTurn",
 		`{"type":"intent","intent":"attack","actor":"fighter","target":"goblin"}`: "OutOfReach",
 	} {
 		send(t, a, text)

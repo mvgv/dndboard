@@ -89,8 +89,32 @@ What a creature may spend on its turn: its movement (splittable around anything 
 _Avoid_: AP, action points
 
 **Hidden roll**:
-A roll made behind the screen, as a Dungeon Master would: every Player sees its result (hit or miss, damage taken) but not its dice or modifiers. Every roll not made by a Player Character is a Hidden roll; Player Character rolls are shown to everyone.
+A roll made behind the screen, as a Dungeon Master would: every Player sees its result (hit or miss, damage taken) but not its dice or modifiers. Every roll not made by a Player Character is a Hidden roll; Player Character rolls are shown to everyone who perceives the roller.
 _Avoid_: secret roll, GM roll
+
+**Standard Actions**:
+The actions every creature has on its turn. Implemented so far: Attack, Dash, Disengage, Dodge, Help, Hide, Ready, Search and Utilize (Magic, Study and Influence come with spells and social play). Each spends the creature's one action.
+_Avoid_: basic actions, combat actions
+
+**Readied action**:
+A response a creature holds after taking the Ready action, released with its Reaction when its trigger occurs. It lapses at the start of the creature's next turn.
+_Avoid_: delayed action, overwatch
+
+**Board object**:
+A clickable thing placed on a Board (a door, chest or lever) that a creature within 5 feet uses with the Utilize action.
+_Avoid_: prop, interactable, item
+
+**Hidden**:
+The Invisible Condition a creature gains by succeeding at the Hide action. It ends when the creature attacks or an enemy finds it with the Search action. Enemies cannot choose a hidden creature as a target.
+_Avoid_: stealthed, concealed
+
+**View**:
+What one Player Character perceives, and the only state sent to its client: the creatures and Board objects it sees (light, Darkvision, line of sight, closed Doors and Blinded decide that), the squares it sees, and the traps and secret doors already discovered. Events are filtered the same way. The server's own State is complete and never leaves the server.
+_Avoid_: fog of war (that is how the client draws it), visible state (for the server's own)
+
+**Hidden information**:
+What no client may receive until the engine confirms it was discovered: undiscovered secret doors and traps, and monsters that are hidden. Passive Perception finds traps and secret doors at or below its value as a Player Character sees them; the Search action rolls a Wisdom (Perception) check that reveals what its total meets.
+_Avoid_: secret (alone), spoiler
 
 **Effect**:
 Something the rules engine applies to a creature outside its own turn's Intents, such as a trap, a spell or a ruling: inflicting or clearing a condition, damage, healing, a saving throw or an ability check. Applied through the game-session seam like an Intent, and answered with events. The declarative effects of spells and class features (#8) compile down to these.
@@ -111,6 +135,14 @@ _Avoid_: popup, confirmation
 **Reaction Rule**:
 A per-creature setting for how a Reaction is decided: always react, never react, or ask (the Reaction Prompt). A creature with no setting reacts always, which is how monsters behave; a Player Character is set to ask unless its owner chose always or never. The setting of a monster is never ask.
 _Avoid_: auto-reaction, preference
+
+**Tactical Brain**:
+What picks a monster's Intent on its turn, from the Legal Actions and what everyone can see. The default is deterministic (the same state always gives the same choice): it scores each way of spending the turn by hit chance × expected damage, the chance to drop a character, and the risk of Opportunity Attacks and of enemies that can reach it, weighted by the monster's Personality. Another brain can sit in front of it and the default is the fallback; an intent outside the Legal Actions is never submitted.
+_Avoid_: monster AI, bot
+
+**Personality**:
+The weights that make monsters choose differently from the same numbers: Ferocity (values damage dealt and closing in), Caution (values damage avoided, and retreating once badly hurt) and Loyalty (stays near and defends a leader). Presets are Balanced, Cowardly, Ferocious and Protective.
+_Avoid_: behavior, alignment, temperament
 
 ### Content format
 

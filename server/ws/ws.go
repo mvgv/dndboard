@@ -23,25 +23,34 @@ const (
 	writeTimeout = 10 * time.Second
 )
 
-// Handler upgrades each request to a WebSocket and seats it at the table. A
-// request from a browser page on another origin is refused.
+// Handler upgrades each request to a WebSocket and seats it at the table as
+// the Player Character named by the "pc" query parameter; a request that names
+// none is refused with 400 before the upgrade. A request from a browser page
+// on another origin is refused. There is no login yet (#14): whoever connects
+// may play any Player Character.
 func Handler(t *table.Table) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		viewer := r.URL.Query().Get("pc")
+		welcome, updates, leave, err := t.Join(viewer)
+		if err != nil {
+			http.Error(w, "the pc parameter must name a Player Character", http.StatusBadRequest)
+			return
+		}
+		defer leave()
 		c, err := websocket.Accept(w, r, nil)
 		if err != nil {
 			return // Accept has written the HTTP error
 		}
 		defer c.CloseNow()
 		c.SetReadLimit(readLimit)
-		serve(r.Context(), c, t)
+		serve(r.Context(), c, t, viewer, welcome, updates)
 	})
 }
 
-func serve(ctx context.Context, c *websocket.Conn, t *table.Table) {
+func serve(ctx context.Context, c *websocket.Conn, t *table.Table, viewer string,
+	welcome table.Message, updates <-chan table.Message) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	welcome, updates, leave := t.Join()
-	defer leave()
 
 	// replies carries rejections back to this client only.
 	replies := make(chan table.Message, 8)
@@ -74,7 +83,7 @@ func serve(ctx context.Context, c *websocket.Conn, t *table.Table) {
 		if err != nil {
 			return
 		}
-		reply, ok := handle(t, typ, data)
+		reply, ok := handle(t, viewer, typ, data)
 		if !ok {
 			continue
 		}
@@ -87,7 +96,7 @@ func serve(ctx context.Context, c *websocket.Conn, t *table.Table) {
 }
 
 // handle submits one client message, returning the rejection to send back, if any.
-func handle(t *table.Table, typ websocket.MessageType, data []byte) (table.Message, bool) {
+func handle(t *table.Table, viewer string, typ websocket.MessageType, data []byte) (table.Message, bool) {
 	var m table.ClientMessage
 	if typ != websocket.MessageText || json.Unmarshal(data, &m) != nil {
 		return rejected("BadMessage", "messages are JSON text"), true
@@ -95,7 +104,7 @@ func handle(t *table.Table, typ websocket.MessageType, data []byte) (table.Messa
 	if m.Type != "intent" {
 		return rejected("BadMessage", "unknown message type"), true
 	}
-	err := t.Submit(m.Intent)
+	err := t.Submit(viewer, m.Intent)
 	var rej *session.Rejection
 	switch {
 	case err == nil:

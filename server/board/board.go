@@ -13,6 +13,9 @@ const (
 	Floor Terrain = iota
 	Wall
 	Difficult
+	// Obscured is floor that is Heavily Obscured (darkness, thick fog); a
+	// creature standing in it can try to Hide.
+	Obscured
 )
 
 // SquareFeet is the side of one square.
@@ -24,7 +27,8 @@ type Board struct {
 	cells []Terrain
 }
 
-// Parse builds a Board from text rows: '.' floor, '#' wall, '~' Difficult Terrain.
+// Parse builds a Board from text rows: '.' floor, '#' wall, '~' Difficult Terrain,
+// '%' Heavily Obscured floor.
 func Parse(rows []string) (*Board, error) {
 	if len(rows) == 0 {
 		return nil, fmt.Errorf("board: no rows")
@@ -42,6 +46,8 @@ func Parse(rows []string) (*Board, error) {
 				b.cells = append(b.cells, Wall)
 			case '~':
 				b.cells = append(b.cells, Difficult)
+			case '%':
+				b.cells = append(b.cells, Obscured)
 			default:
 				return nil, fmt.Errorf("board: unknown square %q at %d,%d", c, x, y)
 			}
@@ -91,6 +97,47 @@ func (b *Board) CanStep(a, c Pos) bool {
 func Distance(a, b Pos) int {
 	dx, dy := abs(a.X-b.X), abs(a.Y-b.Y)
 	return max(dx, dy)
+}
+
+// Size is the width and height in squares.
+func (b *Board) Size() (w, h int) { return b.w, b.h }
+
+// With returns a copy of the Board where square p has terrain t.
+func (b *Board) With(p Pos, t Terrain) *Board {
+	c := *b
+	c.cells = append([]Terrain(nil), b.cells...)
+	if b.In(p) {
+		c.cells[p.Y*b.w+p.X] = t
+	}
+	return &c
+}
+
+// Line returns the squares a straight line from a to c passes through, both
+// included, walking the line between square centers (Bresenham).
+func Line(a, c Pos) []Pos {
+	dx, dy := abs(c.X-a.X), abs(c.Y-a.Y)
+	sx, sy := 1, 1
+	if a.X > c.X {
+		sx = -1
+	}
+	if a.Y > c.Y {
+		sy = -1
+	}
+	out := []Pos{a}
+	err := dx - dy
+	for p := a; p != c; {
+		e2 := 2 * err
+		if e2 > -dy {
+			err -= dy
+			p.X += sx
+		}
+		if e2 < dx {
+			err += dx
+			p.Y += sy
+		}
+		out = append(out, p)
+	}
+	return out
 }
 
 func abs(n int) int {
