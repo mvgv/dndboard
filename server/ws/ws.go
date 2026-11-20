@@ -26,11 +26,16 @@ const (
 // Handler upgrades each request to a WebSocket and seats it at the table as
 // the Player Character named by the "pc" query parameter; a request that names
 // none is refused with 400 before the upgrade. A request from a browser page
-// on another origin is refused. There is no login yet (#14): whoever connects
-// may play any Player Character.
-func Handler(t *table.Table) http.Handler {
+// on another origin is refused. When authorize is not nil, a request it
+// refuses for the named Player Character gets 401 before anything else, so an
+// unauthenticated client never joins; nil lets anyone play any character.
+func Handler(t *table.Table, authorize func(r *http.Request, pc string) bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		viewer := r.URL.Query().Get("pc")
+		if authorize != nil && !authorize(r, viewer) {
+			http.Error(w, "not logged in, or not your Player Character", http.StatusUnauthorized)
+			return
+		}
 		welcome, updates, leave, err := t.Join(viewer)
 		if err != nil {
 			http.Error(w, "the pc parameter must name a Player Character", http.StatusBadRequest)

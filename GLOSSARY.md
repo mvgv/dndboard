@@ -70,6 +70,28 @@ _Avoid_: map, battlemap, dungeon
 A challenge the Adventure Book places in a Scene: monsters, a trap, a hazard or an NPC interaction.
 _Avoid_: fight, combat, event
 
+### Campaign setup
+
+**Lobby**:
+Everything before a Campaign's first turn: login, creating a Campaign from a loaded Adventure, joining it, claiming Player Characters, readiness and chat. It never touches the rules engine.
+_Avoid_: matchmaking, waiting room
+
+**Invite code**:
+The short code a campaign creator shares so friends can join a Campaign that has not started. It stops working once the Campaign starts.
+_Avoid_: room code, link
+
+**Claim**:
+A Player taking control of a Player Character before the Campaign starts. A Player may claim several; a character has one Player. Claiming or releasing withdraws everyone's readiness.
+_Avoid_: assign (as the Player's act), pick
+
+**Ready**:
+A Player's confirmation that the Party is as they want it. The Campaign starts when every Player is ready, every Player Character is claimed, every Player controls at least one, and there are at least two Players (a lone Player is Solo mode).
+_Avoid_: confirmed, accepted
+
+**Solo mode**:
+A developer-only Campaign in which one Player controls the whole Party, for testing. It exists only when the server runs with the developer setting (`-dev`).
+_Avoid_: single player
+
 ### Rules engine
 
 **Intent**:

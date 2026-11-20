@@ -4,12 +4,13 @@ extends Node3D
 ## server's events (dice included) and sends back the intent the Player picks.
 ##
 ## Each client plays one Player Character, named in the address:
-## `godot --path client -- --server=ws://host:port/play?pc=fighter-1` connects
-## on start; otherwise enter the address in the HUD.
+## `godot --path client -- --token=T --server="ws://host:port/play?campaign=ID&pc=fighter-1"`
+## connects on start; otherwise enter the address in the HUD.
 
-const DEFAULT_URL := "ws://127.0.0.1:8080/play?pc=fighter-1"
+const DEFAULT_URL := "ws://127.0.0.1:8080/play?campaign=ID&pc=fighter-1"
 const NO_SQUARE := Vector2i(-1, -1)
 
+var _token := "" # session token from login (--token=), sent as a header
 var _conn := Connection.new()
 var _board := BoardView.new()
 var _dice := DiceTray.new()
@@ -51,6 +52,8 @@ func _ready() -> void:
 		if arg.begins_with("--server="):
 			url = arg.trim_prefix("--server=")
 			autoconnect = true
+		elif arg.begins_with("--token="):
+			_token = arg.trim_prefix("--token=")
 	_hud.set_url(url)
 	if autoconnect:
 		_connect_to(url)
@@ -87,7 +90,7 @@ func _place_camera(distance: float) -> void:
 
 func _connect_to(url: String) -> void:
 	_hud.set_status("Conectando a %s…" % url)
-	if _conn.connect_to(url) != OK:
+	if _conn.connect_to(url, _token) != OK:
 		_hud.set_status("Endereço inválido: " + url)
 
 
