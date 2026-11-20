@@ -8,6 +8,7 @@
 #   MAX_PARALLEL        tickets running at once (default 2)
 #   MAX_STARTS_PER_DAY  tickets started per day (default 6)
 #   SPEC_ISSUE          parent issue whose sub-issues are the tickets (default 1)
+#   REVIEW_MODEL        model for independent reviews (default sonnet)
 #   LIMIT_PAUSE_MIN     idle this long after a session hits the usage limit (default 60)
 #   DRY_RUN=1           log what it would do, change nothing
 #
@@ -128,7 +129,7 @@ Read the failing logs (gh run view <run-id> --log-failed), fix the cause, run th
     --jq "[.[] | select(.body | contains(\"dndboard-review sha=$SHA \"))] | last | .body // empty" | tail -c 200000)
   verdict=$(printf '%s' "$review" | sed -nE 's/.*dndboard-review sha=[0-9a-f]+ verdict=(pass|changes).*/\1/p' | tail -1)
   if [[ -z $verdict ]]; then
-    act "$SCRIPTS/review-pr.sh" "$PR" --model "$(model_for "$N")" --detach
+    act "$SCRIPTS/review-pr.sh" "$PR" --model "${REVIEW_MODEL:-sonnet}" --detach
     continue
   fi
   if [[ $verdict == changes ]]; then

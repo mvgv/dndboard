@@ -12,6 +12,7 @@
 # Environment:
 #   MAX_ATTEMPTS  Claude runs before giving up on reaching a PR (default 6)
 #   WAIT_MIN      minutes to wait between runs, e.g. for usage limits (default 30)
+#   MAX_LIMIT_WAITS  usage-limit waits tolerated, not counted as attempts (default 24, ~12 h)
 #   MAX_FEEDBACK  feedback rounds per ticket before asking a human (default 3)
 #
 # Implement mode is done when an open PR exists for the issue's branch. Each run that
@@ -37,6 +38,7 @@ while [[ $# -gt 0 ]]; do
 done
 MAX_ATTEMPTS=${MAX_ATTEMPTS:-6}
 WAIT_MIN=${WAIT_MIN:-30}
+MAX_LIMIT_WAITS=${MAX_LIMIT_WAITS:-24}
 MAX_FEEDBACK=${MAX_FEEDBACK:-3}
 
 MAIN=$(git -C "$(dirname "$0")" worktree list --porcelain | awk '/^worktree /{print $2; exit}')
@@ -50,7 +52,7 @@ if [[ $DETACH == 1 ]]; then
   extra=""
   [[ -n $FEEDBACK_FILE ]] && extra="--feedback-file '$FEEDBACK_FILE'"
   tmux new-window -d -t tickets -n "t$N" \
-    "MAX_ATTEMPTS=$MAX_ATTEMPTS WAIT_MIN=$WAIT_MIN MAX_FEEDBACK=$MAX_FEEDBACK '$MAIN/scripts/run-ticket.sh' $N --model $MODEL $extra 2>>'$LOG'"
+    "MAX_ATTEMPTS=$MAX_ATTEMPTS WAIT_MIN=$WAIT_MIN MAX_LIMIT_WAITS=$MAX_LIMIT_WAITS MAX_FEEDBACK=$MAX_FEEDBACK '$MAIN/scripts/run-ticket.sh' $N --model $MODEL $extra 2>>'$LOG'"
   echo "Started issue #$N in tmux session 'tickets', window t$N. Log: $LOG"
   exit 0
 fi
@@ -101,7 +103,8 @@ if [[ -n $FEEDBACK_FILE ]]; then
     log "Feedback round $rounds/$MAX_FEEDBACK on #$N (model $MODEL)"
   fi
   RUN_OUT=$(mktemp)
-  for ((i = 1; i <= MAX_ATTEMPTS; i++)); do
+  waits=0
+  while true; do
     set +e
     claude --model "$MODEL" --continue -p "$(grep -v '^KIND: ' "$FEEDBACK_FILE")" 2>&1 | tee "$RUN_OUT" | tee -a "$LOG"
     status=${PIPESTATUS[0]}
@@ -109,8 +112,9 @@ if [[ -n $FEEDBACK_FILE ]]; then
     log "Claude exited with status $status"
     limited "$RUN_OUT" || break
     mark_limited
-    (( i < MAX_ATTEMPTS )) || give_up "Usage limit still hit after $MAX_ATTEMPTS feedback attempts."
-    log "Waiting $WAIT_MIN minutes before retrying the feedback."
+    waits=$((waits + 1))
+    (( waits <= MAX_LIMIT_WAITS )) || give_up "Usage limit still hit after $MAX_LIMIT_WAITS waits of $WAIT_MIN min."
+    log "Usage limit: waiting $WAIT_MIN minutes before retrying the feedback ($waits/$MAX_LIMIT_WAITS)."
     sleep $((WAIT_MIN * 60))
   done
   grep -q '^KIND: conflict$' "$FEEDBACK_FILE" || echo "$rounds" > "$rounds_file"
@@ -143,7 +147,9 @@ PROMPT_CONT="Continue GitHub issue #$N from where you stopped, following the tic
 
 set_labels --add-label in-progress
 
-for ((i = 1; i <= MAX_ATTEMPTS; i++)); do
+i=1
+waits=0
+while (( i <= MAX_ATTEMPTS )); do
   has_pr && break
   if [[ -f $MARK ]]; then
     args=(--continue -p "$PROMPT_CONT")
@@ -158,7 +164,15 @@ for ((i = 1; i <= MAX_ATTEMPTS; i++)); do
   status=${PIPESTATUS[0]}
   set -e
   log "Claude exited with status $status"
-  limited "$RUN_OUT" && mark_limited
+  if limited "$RUN_OUT"; then
+    rm -f "$RUN_OUT"
+    mark_limited
+    waits=$((waits + 1))
+    (( waits <= MAX_LIMIT_WAITS )) || give_up "Usage limit still hit after $MAX_LIMIT_WAITS waits of $WAIT_MIN min."
+    log "Usage limit: waiting $WAIT_MIN minutes; this run does not count as an attempt ($waits/$MAX_LIMIT_WAITS)."
+    sleep $((WAIT_MIN * 60))
+    continue
+  fi
   rm -f "$RUN_OUT"
 
   has_pr && break
@@ -171,6 +185,7 @@ for ((i = 1; i <= MAX_ATTEMPTS; i++)); do
     log "No PR yet; waiting $WAIT_MIN minutes before resuming."
     sleep $((WAIT_MIN * 60))
   fi
+  i=$((i + 1))
 done
 
 if has_pr; then
